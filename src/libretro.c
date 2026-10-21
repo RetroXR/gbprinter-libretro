@@ -51,13 +51,31 @@
  * against its partner until one of them waited on the other for ever. */
 #define FRAME_TICKS ((uint64_t)140448)
 
-/* How far ahead the printer promises not to say anything, and how far it asks
- * to run between rendezvous. A quarter of a transfer, as the Game Boy drivers
- * use, and that matters: a reply has to be published, and land, before the Game
- * Boy can clock the next byte -- a whole 8192-tick transfer after the last one
- * started. A reply stamped one horizon after the clock that asked for it lands
- * 4096 ticks in, half a byte early. */
-#define LINK_HORIZON ((uint64_t)2048)
+/* How the printer keeps time with a Game Boy on the wire.
+ *
+ * GRAIN is how far it asks to run between rendezvous, a quarter of a transfer
+ * as the Game Boy drivers use.
+ *
+ * REPLY is how long after the clock that asked for it the printer's answer to
+ * the next byte lands, at the least. It has to land before the Game Boy clocks
+ * that byte, which it cannot do until the transfer it just started is over: a
+ * whole 8192 ticks after it started, and the clock reached the printer a Game
+ * Boy horizon (2048) in.
+ *
+ * HORIZON is what the printer promises: nothing it says will land before
+ * now + HORIZON. TWICE a grain, which the printer can afford because it never
+ * starts anything -- all it ever sends is an answer -- and needs, because of
+ * where a Game Boy's frames end (link_frame). Every send is stamped no earlier
+ * than the furthest promise made, so an answer lands between REPLY and
+ * REPLY + HORIZON after its clock: at most 2048 + 2048 + 4096 = 8192 - 2048
+ * ticks after the Game Boy started the byte, a quarter of a transfer to spare.
+ *
+ * ANCHOR_LAG is how far into its first frame on a new wire the printer runs
+ * before it rendezvouses for the first time; see link_frame. */
+#define LINK_GRAIN ((uint64_t)2048)
+#define LINK_REPLY ((uint64_t)2048)
+#define LINK_HORIZON ((uint64_t)4096)
+#define LINK_ANCHOR_LAG ((uint64_t)2048)
 
 #define LINK_REANNOUNCE_GRAINS 8
 #define LINK_PENDING_MAX 16
@@ -83,6 +101,8 @@ typedef struct link_state
 {
    uint64_t now;
    uint64_t reannounce_until;
+   uint64_t promised;        /* the furthest horizon published */
+   uint64_t anchor_at;       /* where the first rendezvous on this wire goes */
    uint32_t pending_count;
    uint8_t last_sb;
    uint8_t last_flags;
@@ -149,17 +169,30 @@ static void log_msg(enum retro_log_level level, const char *fmt, ...)
 /* Link                                                                      */
 /* ------------------------------------------------------------------------ */
 
+/* Rendezvous: publish where the printer stands and what it promises, and ask
+ * to run to `request`. */
+static uint64_t link_advance(uint64_t request, uint32_t *wake)
+{
+   uint64_t safe = wire.now + LINK_HORIZON;
+   if (safe > wire.promised)
+      wire.promised = safe;
+   link_anchored = 1;
+   return link_iface.advance(link_handle, wire.now, safe, request, wake);
+}
+
 static void link_send(uint64_t tick, uint8_t type, uint8_t sb, uint8_t flags)
 {
    uint8_t msg[LS_MSG_SIZE];
 
    /* Nothing goes out before the first rendezvous: that is what anchors the
-    * origin the bus measures a tick from. See gambatte's LinkSerial::wire. */
+    * origin the bus measures a tick from. See gambatte's LinkSerial::wire.
+    * Asking for where we already stand is granted at once. */
    if (!link_anchored)
-   {
-      link_iface.advance(link_handle, wire.now, wire.now + LINK_HORIZON, wire.now, NULL);
-      link_anchored = 1;
-   }
+      link_advance(wire.now, NULL);
+
+   /* Never inside a promise already made: a peer may have run up to it. */
+   if (tick < wire.promised)
+      tick = wire.promised;
 
    memset(msg, 0, sizeof(msg));
    msg[0] = type;
@@ -185,7 +218,7 @@ static void link_publish(uint64_t at)
    wire.last_sb = sb;
    wire.last_flags = flags;
    wire.published = 1;
-   link_send(at + LINK_HORIZON, LS_STATE, sb, flags);
+   link_send(at + LINK_REPLY, LS_STATE, sb, flags);
 }
 
 static void link_refresh_peers(void)
@@ -226,7 +259,8 @@ static void link_refresh_peers(void)
       wire.pending_count = 0;
       wire.published = 0;
       link_anchored = 0;
-      wire.reannounce_until = wire.now + LINK_REANNOUNCE_GRAINS * LINK_HORIZON;
+      wire.anchor_at = wire.now + LINK_ANCHOR_LAG;
+      wire.reannounce_until = wire.anchor_at + LINK_REANNOUNCE_GRAINS * LINK_GRAIN;
       log_msg(RETRO_LOG_INFO, "%u machine(s) on the wire, this one is %d\n", link_peers, link_self_id);
    }
 }
@@ -306,16 +340,37 @@ static void link_frame(int feed)
 
       link_refresh_peers();
 
+      /* A new wire: run a little way in before the first rendezvous.
+       *
+       * The bus anchors each machine's clock where it first calls in after the
+       * wire is made, and that is what puts their frame edges where they are
+       * against each other. A netplay session makes a wire with every core held
+       * at the same frame, so the printer calls in at the very start of its
+       * frame; gambatte does too, but mGBA calls in at its next timing event,
+       * up to a grain later -- so its frames end up to a grain EARLIER on the
+       * bus than the printer's, and with the printer ending later, a session
+       * holding both at one frame leaves the printer short of its edge waiting
+       * on a Game Boy that will not move. Calling in a grain late puts the
+       * printer's edges a grain early instead, at or before either Game Boy's,
+       * and the HORIZON covers the rest.
+       *
+       * Safe because nothing can reach a machine that has not anchored: there
+       * is no origin yet to measure a message from. */
+      if (!link_anchored && link_peers >= 2 && wire.now < wire.anchor_at)
+      {
+         link_run_to(wire.anchor_at < end ? wire.anchor_at : end, feed);
+         continue;
+      }
+
       if (link_peers >= 2 && wire.now < wire.reannounce_until)
          wire.published = 0;
       link_publish(wire.now);
 
-      want = wire.now + LINK_HORIZON;
+      want = wire.now + LINK_GRAIN;
       if (want > end)
          want = end;
 
-      grant = link_iface.advance(link_handle, wire.now, wire.now + LINK_HORIZON, want, &wake);
-      link_anchored = 1;
+      grant = link_advance(want, &wake);
       link_pump();
 
       if (grant == RETRO_LINK_UNBOUNDED || grant > end)
@@ -329,6 +384,20 @@ static void link_frame(int feed)
       }
       link_run_to(grant, feed);
    }
+
+   /* Say where this frame ended, before the frame ends. Asking for where we
+    * already stand is granted at once, so this never waits; what it does is
+    * move the printer's published horizon to the frame's edge plus one.
+    *
+    * Without it the last promise of the frame sits wherever the last grain fell,
+    * up to a grain short of the edge -- 140448 is not a multiple of 2048 -- and a
+    * Game Boy whose own last rendezvous falls in that gap asks for a horizon the
+    * printer never published until its NEXT frame starts. In free running that
+    * is a pause; in a netplay session that holds every core at one frame (a
+    * cable landing mid-game, NetplaySession._all_cores_at_link_boundary) it is a
+    * deadlock, because the printer's next frame never comes. */
+   if (link_anchored)
+      link_advance(wire.now, NULL);
 }
 
 static void link_attach(void)
