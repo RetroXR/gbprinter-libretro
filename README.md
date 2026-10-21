@@ -12,7 +12,9 @@ another Game Boy.
 - **Video:** the paper strip hanging out of the slot, 160 dots wide, one row per
   dot line, oldest at the top. No paper is a 1x1 frame. A frame is sent only when
   the strip changes.
-- **Audio:** none (`sample_rate` 0).
+- **Audio:** 32768 Hz, the motor and the head while paper moves, silence
+  otherwise (`src/sound.h`). Synthesised from the mechanism, not recorded:
+  `render_wav out.wav` renders a print to listen to.
 - **Input (port 0):** A = FEED (while held), B = TEAR on the press, tearing the
   oldest *LX* lines (left stick X as a plain count, or everything when 0).
 - **Timing:** exactly one Game Boy frame (140448 link ticks) per `retro_run`, at

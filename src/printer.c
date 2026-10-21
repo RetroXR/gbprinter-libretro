@@ -18,8 +18,45 @@ size_t gbp_serialize_size(void)
 /* The strip                                                                 */
 /* ------------------------------------------------------------------------ */
 
-static void strip_push(gbp_printer *p, const uint8_t *line)
+static void note_line(gbp_printer *p, const uint8_t *line, uint64_t tick)
 {
+   gbp_line_event *e;
+   unsigned x, ink = 0;
+   for (x = 0; x < GBP_WIDTH; x++)
+      if (line[x] < 0xFF)
+         ink++;
+   if (p->event_count >= GBP_EVENTS_MAX)
+   {
+      /* Nobody is listening (a frontend that never asks for sound): keep the
+       * newest, which is what anyone starting to listen would want. */
+      memmove(&p->events[0], &p->events[1], sizeof(p->events[0]) * (GBP_EVENTS_MAX - 1));
+      p->event_count = GBP_EVENTS_MAX - 1;
+   }
+   e = &p->events[p->event_count++];
+   memset(e, 0, sizeof(*e));
+   e->tick = tick;
+   e->ink = (uint16_t)ink;
+}
+
+unsigned gbp_take_events(gbp_printer *p, uint64_t tick, gbp_line_event *out, unsigned max)
+{
+   unsigned n = 0;
+   while (n < p->event_count && n < max && p->events[n].tick <= tick)
+   {
+      out[n] = p->events[n];
+      n++;
+   }
+   if (n)
+   {
+      memmove(&p->events[0], &p->events[n], sizeof(p->events[0]) * (p->event_count - n));
+      p->event_count -= n;
+   }
+   return n;
+}
+
+static void strip_push(gbp_printer *p, const uint8_t *line, uint64_t tick)
+{
+   note_line(p, line, tick);
    if (p->strip_lines >= GBP_STRIP_MAX)
    {
       /* The oldest paper falls off the end. Nobody tore it, and a strip this
@@ -33,11 +70,11 @@ static void strip_push(gbp_printer *p, const uint8_t *line)
    p->strip_serial++;
 }
 
-static void strip_push_blank(gbp_printer *p)
+static void strip_push_blank(gbp_printer *p, uint64_t tick)
 {
    uint8_t line[GBP_WIDTH];
    memset(line, 0xFF, sizeof(line));
-   strip_push(p, line);
+   strip_push(p, line, tick);
 }
 
 unsigned gbp_tear(gbp_printer *p, unsigned lines)
@@ -135,7 +172,7 @@ static void start_print(gbp_printer *p, uint64_t tick)
       p->status |= GBP_STATUS_PRINTING;
 }
 
-static void burn_line(gbp_printer *p)
+static void burn_line(gbp_printer *p, uint64_t tick)
 {
    uint8_t line[GBP_WIDTH];
    unsigned n = p->job_done;
@@ -154,7 +191,7 @@ static void burn_line(gbp_printer *p)
       }
    }
 
-   strip_push(p, line);
+   strip_push(p, line, tick);
    p->job_done++;
 }
 
@@ -162,7 +199,7 @@ void gbp_run(gbp_printer *p, uint64_t tick, int feed)
 {
    while (p->job_active && p->job_next_tick <= tick)
    {
-      burn_line(p);
+      burn_line(p, p->job_next_tick);
       p->job_next_tick += GBP_LINE_TICKS;
       if (p->job_done >= p->job_lines)
       {
@@ -182,7 +219,7 @@ void gbp_run(gbp_printer *p, uint64_t tick, int feed)
       }
       while (p->feed_next_tick <= tick)
       {
-         strip_push_blank(p);
+         strip_push_blank(p, p->feed_next_tick);
          p->feed_next_tick += GBP_LINE_TICKS;
       }
    }

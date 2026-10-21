@@ -18,6 +18,7 @@
 
 #include "../src/libretro.c"
 #include "../src/printer.c"
+#include "../src/sound.c"
 
 static int failures;
 static int checks;
@@ -494,6 +495,17 @@ static void RETRO_CALLCONV mock_video(const void *data, unsigned w, unsigned h, 
    frame_h = h;
    memcpy(frame_px, data, (size_t)w * h * 4);
 }
+static unsigned audio_frames;
+static long audio_energy;
+static size_t RETRO_CALLCONV mock_audio(const int16_t *data, size_t frames)
+{
+   size_t i;
+   audio_frames += (unsigned)frames;
+   for (i = 0; i < frames * 2; i++)
+      audio_energy += data[i] < 0 ? -data[i] : data[i];
+   return frames;
+}
+
 static int pad_a, pad_b, pad_lx;
 static void RETRO_CALLCONV mock_poll(void) {}
 static int16_t RETRO_CALLCONV mock_input(unsigned port, unsigned device, unsigned index, unsigned id)
@@ -561,7 +573,7 @@ static void test_core_on_the_wire(void)
     * Any gap at all is enough: the reply is published 2048 ticks after the
     * clock that asked for it and the next clock cannot come sooner than 8192. */
    const uint64_t spacing = 8192 + 512;
-   uint64_t t0 = 20000;
+   uint64_t t0 = 130 * FRAME_TICKS; /* after the idle stretch below */
    size_t len, i;
    unsigned acks = 0, wrong = 0;
    unsigned bx = 0, by = 0;
@@ -597,11 +609,17 @@ static void test_core_on_the_wire(void)
    retro_set_video_refresh(mock_video);
    retro_set_input_poll(mock_poll);
    retro_set_input_state(mock_input);
+   retro_set_audio_sample_batch(mock_audio);
    retro_init();
    CHECK(retro_load_game(NULL), "load with no content failed");
 
    frames_sent = frames_duped = 0;
-   run_frames(1);
+   audio_frames = 0;
+   audio_energy = 0;
+   run_frames(128);
+   CHECK(audio_frames == 70224, "128 frames made %u samples, want exactly 70224 (548.625 a frame)",
+         audio_frames);
+   CHECK(audio_energy == 0, "an idle printer made sound (%ld)", audio_energy);
    CHECK(frame_w == 1 && frame_h == 1, "empty paper should be a 1x1 frame, got %ux%u", frame_w, frame_h);
 
    /* Enough frames for every byte and the print. */
@@ -655,10 +673,16 @@ static void test_core_on_the_wire(void)
    pad_b = 0;
    CHECK(printer.strip_lines == 0, "B with LX 0 should tear everything, left %u", printer.strip_lines);
 
-   /* FEED for a second puts out blank paper. */
+   /* FEED for a second puts out blank paper, and the motor is heard. */
+   audio_energy = 0;
    pad_a = 1;
    run_frames(60);
    pad_a = 0;
+   CHECK(audio_energy > 0, "feeding paper made no sound");
+   run_frames(30);
+   audio_energy = 0;
+   run_frames(30);
+   CHECK(audio_energy == 0, "the motor kept sounding after the paper stopped (%ld)", audio_energy);
    CHECK(printer.strip_lines >= 30 && printer.strip_lines <= 40, "a second of FEED gave %u lines",
          printer.strip_lines);
 

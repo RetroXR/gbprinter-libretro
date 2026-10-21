@@ -99,7 +99,19 @@ enum
 /* Everything here is plain data with no pointers, so a savestate is a copy of
  * the struct -- see gbp_serialize. Field order is the savestate layout: append
  * only, and bump GBP_STATE_VERSION when it changes. */
-#define GBP_STATE_VERSION 1
+#define GBP_STATE_VERSION 2
+
+/* A line of paper coming out, for the sound: when, and how many of its dots
+ * were burned (none for paper only fed). Kept until the core's audio has
+ * played past it. */
+#define GBP_EVENTS_MAX 64
+
+typedef struct gbp_line_event
+{
+   uint64_t tick;
+   uint16_t ink;
+   uint16_t pad[3];
+} gbp_line_event;
 
 typedef struct gbp_printer
 {
@@ -152,7 +164,16 @@ typedef struct gbp_printer
    uint32_t tear_count;
    uint32_t pad4;
    uint8_t  strip[GBP_STRIP_MAX][GBP_WIDTH];
+
+   /* Lines out since the sound last took them, oldest first. */
+   uint32_t event_count;
+   uint32_t pad5;
+   gbp_line_event events[GBP_EVENTS_MAX];
 } gbp_printer;
+
+/* Hand over the lines that came out at or before `tick`, oldest first; returns
+ * how many were copied into `out` (at most `max`) and drops them. */
+unsigned gbp_take_events(gbp_printer *p, uint64_t tick, gbp_line_event *out, unsigned max);
 
 void gbp_init(gbp_printer *p);
 

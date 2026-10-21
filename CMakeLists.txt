@@ -6,7 +6,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 option(GBPRINTER_TESTS "Build the Godot-free printer test" ON)
 
-set(GBPRINTER_SOURCES src/libretro.c src/printer.c)
+set(GBPRINTER_SOURCES src/libretro.c src/printer.c src/sound.c)
 
 add_library(gbprinter_libretro SHARED ${GBPRINTER_SOURCES})
 target_include_directories(gbprinter_libretro PRIVATE include src)
@@ -14,6 +14,10 @@ target_include_directories(gbprinter_libretro PRIVATE include src)
 # The file name is the contract with every frontend: no "lib" prefix anywhere,
 # and Android's suffix added by the release workflow when it is packaged.
 set_target_properties(gbprinter_libretro PROPERTIES PREFIX "")
+
+if(NOT MSVC)
+  target_link_libraries(gbprinter_libretro PRIVATE m)
+endif()
 
 if(MSVC)
   target_compile_options(gbprinter_libretro PRIVATE /W4 /wd4100)
@@ -42,6 +46,16 @@ if(GBPRINTER_TESTS AND NOT ANDROID AND NOT CMAKE_CROSSCOMPILING)
   target_include_directories(printer_test PRIVATE include src)
   if(MSVC)
     target_compile_definitions(printer_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+  else()
+    target_link_libraries(printer_test PRIVATE m)
   endif()
   add_test(NAME printer_test COMMAND printer_test)
+  # Not a test: renders a print's sound to a WAV for listening (render_wav out.wav).
+  add_executable(render_wav tests/render_wav.c)
+  target_include_directories(render_wav PRIVATE include src)
+  if(MSVC)
+    target_compile_definitions(render_wav PRIVATE _CRT_SECURE_NO_WARNINGS)
+  else()
+    target_link_libraries(render_wav PRIVATE m)
+  endif()
 endif()

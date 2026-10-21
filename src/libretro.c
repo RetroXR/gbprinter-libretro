@@ -28,6 +28,7 @@
 
 #include "link_interface.h"
 #include "printer.h"
+#include "sound.h"
 
 #define CORE_NAME    "GB Printer"
 #define CORE_VERSION "1.0.0"
@@ -112,10 +113,13 @@ typedef struct core_state
    uint8_t prev_tear;
    uint8_t pad[3];
    link_state wire;
+   gbp_sound sound;
    gbp_printer printer;
 } core_state;
 
 static gbp_printer printer;
+static gbp_sound sound;
+static int16_t sound_buf[550 * 2];
 static uint8_t prev_tear;
 
 static retro_environment_t environ_cb;
@@ -447,9 +451,8 @@ RETRO_API void retro_get_system_av_info(struct retro_system_av_info *info)
 {
    memset(info, 0, sizeof(*info));
    info->timing.fps = 4194304.0 / 70224.0;
-   /* No sound. A frontend paces a silent core on its frame rate alone, and a
-    * silent machine on a link bus never brakes the machine it is cabled to. */
-   info->timing.sample_rate = 0.0;
+   /* The motor and the head (sound.h). Exactly 548.625 samples a frame. */
+   info->timing.sample_rate = GBP_SOUND_RATE;
    info->geometry.base_width = GBP_WIDTH;
    info->geometry.base_height = 144;
    info->geometry.max_width = GBP_WIDTH;
@@ -497,6 +500,11 @@ RETRO_API void retro_run(void)
 
    link_frame(feed);
    present();
+   {
+      unsigned n = gbp_sound_frame(&sound, &printer, wire.now, sound_buf);
+      if (n && audio_batch_cb)
+         audio_batch_cb(sound_buf, n);
+   }
 }
 
 RETRO_API bool retro_load_game(const struct retro_game_info *game)
@@ -518,6 +526,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
    environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, desc);
 
    gbp_init(&printer);
+   gbp_sound_init(&sound);
    memset(&wire, 0, sizeof(wire));
    prev_tear = 0;
    sent_any = 0;
@@ -556,6 +565,7 @@ RETRO_API bool retro_serialize(void *data, size_t size)
    s->size = (uint32_t)sizeof(core_state);
    s->prev_tear = prev_tear;
    s->wire = wire;
+   s->sound = sound;
    s->printer = printer;
    return true;
 }
@@ -568,6 +578,7 @@ RETRO_API bool retro_unserialize(const void *data, size_t size)
       return false;
    prev_tear = s->prev_tear;
    wire = s->wire;
+   sound = s->sound;
    printer = s->printer;
    /* The other end has been told nothing about this state yet. */
    wire.published = 0;
