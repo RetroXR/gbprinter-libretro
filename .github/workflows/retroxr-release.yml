@@ -1,0 +1,202 @@
+# Build the Game Boy Printer core for every platform retroXR ships and publish
+# it as a release, so retroXR's CoreDownloadManager can fetch it.
+#
+#   Windows  gbprinter_libretro.dll.zip            containing gbprinter_libretro.dll
+#   Android  gbprinter_libretro_android.so.zip     containing gbprinter_libretro_android.so
+#   Linux    gbprinter_libretro.so.zip             containing gbprinter_libretro.so
+#   macOS    gbprinter_libretro_<arch>.dylib.zip   containing gbprinter_libretro.dylib
+#
+# The asset names are the contract with core_sources.gd; a mismatch fails
+# silently in the app.
+#
+# The release must NOT be a prerelease: the download URL is the /releases/latest/
+# form, and GitHub's `latest` skips prereleases.
+name: retroXR core release
+
+on:
+  push:
+    branches: [retroxr]
+    tags:
+      - 'retroxr-gbprinter-libretro-v*'
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch, tag or SHA to build'
+        required: true
+        default: 'retroxr'
+      tag:
+        description: 'Release tag to publish as (leave blank to build without publishing)'
+        required: false
+        default: ''
+
+jobs:
+  windows:
+    name: Windows x86_64 (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Build and test
+        shell: bash
+        run: |
+          cmake -S . -B build -A x64
+          cmake --build build --config Release
+          ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p stage
+          cp build/Release/gbprinter_libretro.dll stage/
+          (cd stage && 7z a -tzip ../gbprinter_libretro.dll.zip gbprinter_libretro.dll > /dev/null)
+          ls -l gbprinter_libretro.dll.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: gbprinter_libretro.dll.zip
+          if-no-files-found: error
+
+  android:
+    name: Android arm64-v8a
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      # The runner image carries an NDK; the toolchain file picks the ABI and the
+      # API level. The tests are not built for a target this runner cannot run.
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 \
+            -DCMAKE_BUILD_TYPE=Release -DGBPRINTER_TESTS=OFF
+          cmake --build build
+          "$ANDROID_NDK_LATEST_HOME"/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip \
+            --strip-unneeded build/gbprinter_libretro.so
+
+      - name: Package
+        run: |
+          mkdir -p stage
+          cp build/gbprinter_libretro.so stage/gbprinter_libretro_android.so
+          (cd stage && zip -q -X ../gbprinter_libretro_android.so.zip gbprinter_libretro_android.so)
+          file stage/gbprinter_libretro_android.so
+          ls -lh gbprinter_libretro_android.so.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: gbprinter_libretro_android.so.zip
+          if-no-files-found: error
+
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Build and test
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+          ctest --test-dir build --output-on-failure
+
+      - name: Package
+        run: |
+          mkdir -p stage
+          cp build/gbprinter_libretro.so stage/
+          (cd stage && zip -q -X ../gbprinter_libretro.so.zip gbprinter_libretro.so)
+          ls -lh gbprinter_libretro.so.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: gbprinter_libretro.so.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    runs-on: macos-14
+    strategy:
+      matrix:
+        arch: [arm64, x86_64]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15
+          cmake --build build -j$(sysctl -n hw.ncpu)
+          if [ "${{ matrix.arch }}" = arm64 ]; then ctest --test-dir build --output-on-failure; fi
+
+      - name: Package
+        run: |
+          lib=gbprinter_libretro.dylib
+          lipo -info "build/$lib"
+          if [ "$(lipo -archs "build/$lib")" != "${{ matrix.arch }}" ]; then
+            echo "$lib is not ${{ matrix.arch }}"
+            exit 1
+          fi
+          mkdir -p stage
+          cp "build/$lib" "stage/$lib"
+          (cd stage && zip -q -X ../gbprinter_libretro_${{ matrix.arch }}.dylib.zip "$lib")
+          ls -lh gbprinter_libretro_${{ matrix.arch }}.dylib.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: gbprinter_libretro_${{ matrix.arch }}.dylib.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [windows, android, linux, macos]
+    if: startsWith(github.ref, 'refs/tags/') || github.event.inputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          ls -lh dist
+          cat > notes.md <<EOF
+          Game Boy Printer libretro core built for retroXR, from \`$GITHUB_SHA\`.
+
+          Windows x86_64, Android arm64-v8a, Linux x86_64 and macOS arm64 and
+          x86_64. The source for these binaries is this tag.
+
+          A printer on the far end of the \`gb-sio-1\` link wire that the
+          retroXR builds of gambatte and mGBA speak: the Game Boy prints to it
+          exactly as it would to the real one, and the paper is the video frame.
+          EOF
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Game Boy Printer (retroXR) $TAG" \
+              --notes-file notes.md
+          fi
+          gh release upload "$TAG" \
+            dist/gbprinter_libretro.dll.zip \
+            dist/gbprinter_libretro_android.so.zip \
+            dist/gbprinter_libretro.so.zip \
+            dist/gbprinter_libretro_arm64.dylib.zip \
+            dist/gbprinter_libretro_x86_64.dylib.zip \
+            --repo "$GITHUB_REPOSITORY" --clobber
