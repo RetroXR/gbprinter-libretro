@@ -567,12 +567,12 @@ static void run_frames(unsigned n)
       retro_run();
 }
 
-static void test_core_on_the_wire(void)
+/* `spacing`: ticks from one byte's start to the next. A normal-speed transfer is
+ * 8192; a Game Boy Color in double speed (Super Mario Bros. Deluxe) takes 4096,
+ * and its answer then has 2048 ticks to land after the clock reaches the
+ * printer. */
+static void test_core_on_the_wire(uint64_t spacing)
 {
-   /* Byte spacing: one transfer plus a short gap, as a game's send loop does.
-    * Any gap at all is enough: the reply is published 2048 ticks after the
-    * clock that asked for it and the next clock cannot come sooner than 8192. */
-   const uint64_t spacing = 8192 + 512;
    uint64_t t0 = 130 * FRAME_TICKS; /* after the idle stretch below */
    size_t len, i;
    unsigned acks = 0, wrong = 0;
@@ -725,7 +725,9 @@ int main(void)
    test_palette_and_sheets();
    test_tear_and_feed();
    test_state_round_trip();
-   test_core_on_the_wire();
+   test_core_on_the_wire(8192 + 512);
+   /* Back to back in double speed, no gap at all. */
+   test_core_on_the_wire(4096);
 
    printf("%d checks, %d failed\n", checks, failures);
    return failures;

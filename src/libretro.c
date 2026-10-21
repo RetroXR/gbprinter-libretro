@@ -53,29 +53,24 @@
 
 /* How the printer keeps time with a Game Boy on the wire.
  *
- * GRAIN is how far it asks to run between rendezvous, a quarter of a transfer
- * as the Game Boy drivers use.
+ * GRAIN is how far it asks to run between rendezvous, a quarter of a normal
+ * transfer as the Game Boy drivers use. HORIZON is what it promises: nothing it
+ * says lands before now + HORIZON. REPLY is how long after the clock that asked
+ * for it the answer to the next byte lands.
  *
- * REPLY is how long after the clock that asked for it the printer's answer to
- * the next byte lands, at the least. It has to land before the Game Boy clocks
- * that byte, which it cannot do until the transfer it just started is over: a
- * whole 8192 ticks after it started, and the clock reached the printer a Game
- * Boy horizon (2048) in.
+ * All three are 2048, and REPLY may not be more than HORIZON's worth past the
+ * clock: a Game Boy Color in double speed -- Super Mario Bros. Deluxe -- takes a
+ * byte in 4096 ticks, not 8192, and its clock reaches the printer a Game Boy
+ * horizon (2048) after it started, so an answer has 2048 ticks to land. Promising
+ * further ahead than that (4096 was tried, for netplay) made every answer late
+ * and the game report Error 02.
  *
- * HORIZON is what the printer promises: nothing it says will land before
- * now + HORIZON. TWICE a grain, which the printer can afford because it never
- * starts anything -- all it ever sends is an answer -- and needs, because of
- * where a Game Boy's frames end (link_frame). Every send is stamped no earlier
- * than the furthest promise made, so an answer lands between REPLY and
- * REPLY + HORIZON after its clock: at most 2048 + 2048 + 4096 = 8192 - 2048
- * ticks after the Game Boy started the byte, a quarter of a transfer to spare.
- *
- * ANCHOR_LAG is how far into its first frame on a new wire the printer runs
- * before it rendezvouses for the first time; see link_frame. */
+ * It is enough because the printer only ever publishes a horizon past a tick once
+ * it has answered every clock up to that tick: the answer to a clock at t is sent
+ * before the printer promises anything beyond t + 2048. */
 #define LINK_GRAIN ((uint64_t)2048)
 #define LINK_REPLY ((uint64_t)2048)
-#define LINK_HORIZON ((uint64_t)4096)
-#define LINK_ANCHOR_LAG ((uint64_t)2048)
+#define LINK_HORIZON ((uint64_t)2048)
 
 #define LINK_REANNOUNCE_GRAINS 8
 #define LINK_PENDING_MAX 16
@@ -102,7 +97,6 @@ typedef struct link_state
    uint64_t now;
    uint64_t reannounce_until;
    uint64_t promised;        /* the furthest horizon published */
-   uint64_t anchor_at;       /* where the first rendezvous on this wire goes */
    uint32_t pending_count;
    uint8_t last_sb;
    uint8_t last_flags;
@@ -259,8 +253,7 @@ static void link_refresh_peers(void)
       wire.pending_count = 0;
       wire.published = 0;
       link_anchored = 0;
-      wire.anchor_at = wire.now + LINK_ANCHOR_LAG;
-      wire.reannounce_until = wire.anchor_at + LINK_REANNOUNCE_GRAINS * LINK_GRAIN;
+      wire.reannounce_until = wire.now + LINK_REANNOUNCE_GRAINS * LINK_GRAIN;
       log_msg(RETRO_LOG_INFO, "%u machine(s) on the wire, this one is %d\n", link_peers, link_self_id);
    }
 }
@@ -340,28 +333,6 @@ static void link_frame(int feed)
 
       link_refresh_peers();
 
-      /* A new wire: run a little way in before the first rendezvous.
-       *
-       * The bus anchors each machine's clock where it first calls in after the
-       * wire is made, and that is what puts their frame edges where they are
-       * against each other. A netplay session makes a wire with every core held
-       * at the same frame, so the printer calls in at the very start of its
-       * frame; gambatte does too, but mGBA calls in at its next timing event,
-       * up to a grain later -- so its frames end up to a grain EARLIER on the
-       * bus than the printer's, and with the printer ending later, a session
-       * holding both at one frame leaves the printer short of its edge waiting
-       * on a Game Boy that will not move. Calling in a grain late puts the
-       * printer's edges a grain early instead, at or before either Game Boy's,
-       * and the HORIZON covers the rest.
-       *
-       * Safe because nothing can reach a machine that has not anchored: there
-       * is no origin yet to measure a message from. */
-      if (!link_anchored && link_peers >= 2 && wire.now < wire.anchor_at)
-      {
-         link_run_to(wire.anchor_at < end ? wire.anchor_at : end, feed);
-         continue;
-      }
-
       if (link_peers >= 2 && wire.now < wire.reannounce_until)
          wire.published = 0;
       link_publish(wire.now);
@@ -395,7 +366,14 @@ static void link_frame(int feed)
     * printer never published until its NEXT frame starts. In free running that
     * is a pause; in a netplay session that holds every core at one frame (a
     * cable landing mid-game, NetplaySession._all_cores_at_link_boundary) it is a
-    * deadlock, because the printer's next frame never comes. */
+    * deadlock, because the printer's next frame never comes.
+    *
+    * That holds with gambatte, whose frames start where the printer's do on the
+    * bus. mGBA first calls in after a cable is made at its next timing event, up
+    * to a grain into its frame, so its frame edges can sit before the printer's;
+    * held at one frame WHILE cabled (a lead pulled mid-session), the printer can
+    * then wait on it for ever. Making that impossible needs a promise further
+    * ahead than a double-speed answer allows -- see LINK_HORIZON. */
    if (link_anchored)
       link_advance(wire.now, NULL);
 }
