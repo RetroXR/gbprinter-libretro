@@ -403,7 +403,7 @@ static int mock_bad_stamp;
 static retro_link_port_t *RETRO_CALLCONV mock_attach(unsigned port, const char *id, uint64_t rate)
 {
    (void)port;
-   CHECK(strcmp(id, "gb-sio-1") == 0 && rate == 8388608, "attached as %s @ %llu", id,
+   CHECK(strcmp(id, "gb-sio") == 0 && rate == 8388608, "attached as %s @ %llu", id,
          (unsigned long long)rate);
    return (retro_link_port_t *)(uintptr_t)1;
 }

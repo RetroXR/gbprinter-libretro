@@ -183,7 +183,7 @@ jobs:
           Windows x86_64, Android arm64-v8a, Linux x86_64 and macOS arm64 and
           x86_64. The source for these binaries is this tag.
 
-          A printer on the far end of the \`gb-sio-1\` link wire that the
+          A printer on the far end of the \`gb-sio\` link wire that the
           retroXR builds of gambatte and mGBA speak: the Game Boy prints to it
           exactly as it would to the real one, and the paper is the video frame.
           EOF

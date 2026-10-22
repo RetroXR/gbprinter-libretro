@@ -2,7 +2,7 @@
  *
  * There is no CPU here and no game. The printer is a peripheral on the far end
  * of a Game Boy link cable, and the cable is the frontend's link bus
- * (RETRO_ENVIRONMENT_GET_LINK_INTERFACE): this core joins the "gb-sio-1" wire
+ * (RETRO_ENVIRONMENT_GET_LINK_INTERFACE): this core joins the "gb-sio" wire
  * that gambatte and mGBA already speak to each other, and answers the Game Boy
  * the way a printer would. Neither Game Boy core knows or needs to know that the
  * machine on the other end of its cable is not another Game Boy.
@@ -39,7 +39,7 @@
 
 /* What gambatte's and mGBA's Game Boy drivers call it, and must: peers whose
  * protocol ids differ are never joined. */
-#define LINK_PROTOCOL "gb-sio-1"
+#define LINK_PROTOCOL "gb-sio"
 
 /* Twice the Game Boy's 4.194304 MHz, as both Game Boy drivers count. */
 #define LINK_CLOCK_RATE ((uint64_t)8388608)

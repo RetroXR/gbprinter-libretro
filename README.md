@@ -4,7 +4,7 @@ A Game Boy Printer (MGB-007) as a libretro core, for [retroXR](https://github.co
 
 There is no CPU here and no game. The printer joins the frontend-hosted link bus
 (`RETRO_ENVIRONMENT_GET_LINK_INTERFACE`, environment 94, proposed upstream in
-libretro/RetroArch#19454) on the `gb-sio-1` wire that the retroXR builds of
+libretro/RetroArch#19454) on the `gb-sio` wire that the retroXR builds of
 **gambatte** and **mGBA** already speak. A Game Boy cabled to it prints exactly as
 it would to the real printer; neither Game Boy core knows the far end is not
 another Game Boy.
