@@ -36,7 +36,7 @@
 #define GBP_TICKS_PER_SAMPLE 256
 
 /* The case's resonances a motor step rings (sound.c). */
-#define GBP_SOUND_MODES 8
+#define GBP_SOUND_MODES 11
 
 typedef struct gbp_sound
 {
@@ -49,7 +49,7 @@ typedef struct gbp_sound
    uint32_t turns;           /* turns since the motor started */
    float mode[GBP_SOUND_MODES][2]; /* the motor's harmonics, two samples of history each */
    float swell[2][2];        /* the two bands the mid-turn swell rings */
-   float knock[2];           /* the once-a-turn knock */
+   float knock[3][2];        /* the once-a-turn knock's three rings */
    float knock_hiss;         /* its burst of noise, decaying */
    float hiss_hp;            /* the rattle's band filter: high-pass state */
    float hiss_lp[4];         /* and its four low-pass stages */

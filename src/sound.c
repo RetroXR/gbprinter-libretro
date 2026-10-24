@@ -67,11 +67,15 @@ static const float TURN_RATTLE_DB[TURN_PARTS] = {
 #define TURN_TONE_DEPTH 0.7f
 
 /* MEASURED: which harmonics of the step ring loudest, and how loud against the
- * 10th. Each rings longer than a step, so the steps add up into those
+ * 10th, with three weaker ones that give the real one its texture (the 21st,
+ * 29th and 41st, 7-11 dB short in the fit without them). Each rings longer
+ * than a step, so the steps add up into those
  * harmonics' lines rather than a rattle, and each is tuned to its harmonic of
  * the rate now, so the lines follow the pitch as it winds down and back. */
-static const float MODE_HARMONIC[GBP_SOUND_MODES] = { 9, 10, 18, 20, 24, 36, 39, 40 };
-static const float MODE_GAIN[GBP_SOUND_MODES] = { 0.30f, 1.00f, 0.57f, 0.64f, 0.36f, 0.97f, 0.65f, 0.56f };
+static const float MODE_HARMONIC[GBP_SOUND_MODES] = { 9, 10, 18, 20, 24, 36, 39, 40, 21, 29, 41 };
+static const float MODE_GAIN[GBP_SOUND_MODES] = {
+   0.30f, 1.00f, 0.57f, 0.64f, 0.36f, 0.97f, 0.65f, 0.56f, 0.22f, 0.20f, 0.22f
+};
 #define MODE_DECAY_S 0.060f
 /* How fast the rings die once the motor stops, seconds. */
 #define STOP_DECAY_S 0.015f
@@ -91,10 +95,12 @@ static const float MODE_GAIN[GBP_SOUND_MODES] = { 0.30f, 1.00f, 0.57f, 0.64f, 0.
 #define TICK_GAIN 0.4f
 
 /* The knock once a turn: MEASURED about 3.6 ms of ring near 5 kHz, a third of
- * its energy elsewhere, some 24 dB over the motor just before it. */
-#define KNOCK_HZ 5000.0f
+ * its energy elsewhere, some 24 dB over the motor just before it. Three rings,
+ * not one: a single ring at 5 kHz put nine tenths of it there. */
+static const float KNOCK_HZ[3] = { 5000.0f, 3300.0f, 7200.0f };
+static const float KNOCK_MIX[3] = { 1.0f, 0.42f, 0.34f };
 #define KNOCK_DECAY_S 0.0022f
-#define KNOCK_STRIKE 1.3f
+#define KNOCK_STRIKE 1.05f
 #define KNOCK_HISS_DECAY_S 0.0025f
 #define KNOCK_HISS_GAIN 0.22f
 
@@ -107,12 +113,16 @@ static const float SWELL_MIX[2] = { 1.0f, 0.55f };
 #define SWELL_DECAY_S 0.0006f
 #define SWELL_FROM 0.30f
 #define SWELL_TO 0.60f
-#define SWELL_GAIN 0.09f
+/* 0.09 pumped the motor 4.5 dB louder through the swell where the recording
+ * stays about as loud (rendered and measured, with the rattle's own rise). */
+#define SWELL_GAIN 0.03f
 
 /* The head's tick: noise, a couple of milliseconds long, as loud as the line is
  * inked. */
 #define CLICK_DECAY_S 0.0018f
-#define CLICK_GAIN 0.35f
+/* Unverified in the recording, and much of what was left too bright above
+ * 8 kHz: kept, quieter. */
+#define CLICK_GAIN 0.2f
 
 #define OUTPUT_GAIN 14000.0f
 
@@ -262,7 +272,8 @@ unsigned gbp_sound_frame(gbp_sound *s, gbp_printer *p, uint64_t end_tick, int16_
             tones += resonate(s->mode[m], strike, rate_now * MODE_HARMONIC[m], MODE_DECAY_S) * MODE_GAIN[m];
          v += tones * powf(10.0f, TURN_TONE_DEPTH * turn_at(TURN_TONE_DB, s->turn) / 20.0f);
       }
-      v += resonate(s->knock, knock, KNOCK_HZ, KNOCK_DECAY_S);
+      for (m = 0; m < 3; m++)
+         v += resonate(s->knock[m], knock * KNOCK_MIX[m], KNOCK_HZ[m], KNOCK_DECAY_S);
       if (s->knock_hiss > 0.001f)
       {
          v += noise(s) * s->knock_hiss * KNOCK_HISS_GAIN;
