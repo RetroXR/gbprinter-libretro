@@ -8,20 +8,20 @@
 /* What the printer sounds like while paper is coming out.
  *
  * SYNTHESISED, and fitted to a recording of a real MGB-007 printing (a
- * fifteen-second print found online, 44.1 kHz): what is measured from it is
- * marked so below, the rest is shaped by ear. Three sources:
+ * fifteen-second print found online, 44.1 kHz, measured twice over, the second
+ * time independently): what is measured from it is marked so in sound.c, the
+ * rest is shaped by ear. Three sources:
  *
- *   The paper motor. A stepper, heard stepping 127.7 times a second (every
- *   tone in the recording is a harmonic of that), each step ringing the case's
- *   resonances -- the 9th, 10th, 18th, 20th, 24th, 36th and 40th harmonics
- *   stand out, around 1.2, 2.4, 3.1 and 4.6-5.1 kHz -- over a hiss across
- *   1-7 kHz that pulses with the steps. Its own clock, not the lines': it runs
- *   while paper moves, burned or only fed.
+ *   The paper motor. A stepper whose harmonics -- the 9th, 10th, 18th, 20th,
+ *   24th, 36th, 39th and 40th stand out, around 1.2, 2.4, 3.1 and 4.6-5.1 kHz --
+ *   ring over a rattle across 1-7 kHz. It runs while paper moves, burned or only
+ *   fed, on its own clock rather than the lines'.
  *
- *   The gear's turn. Every 146 steps (1.14 s) something in the gear train
- *   knocks, a 3 ms ring near 5 kHz about ten times the motor's level, and
- *   half way round the turn a swell of 3-4 kHz rises and falls: the winding
- *   that comes round and round while a print comes out.
+ *   The gear's turn, once every 1.14 s: a knock (a ring near 5 kHz with noise
+ *   across the spectrum), the step rate holding near 127.8 Hz for a third of the
+ *   turn, then winding down to 119.5 Hz and snapping back up past 129 -- the
+ *   pitch falling a semitone and more and recovering, turn after turn, while the
+ *   tones give way to rattle and the whole stays about as loud.
  *
  *   The head. Burning a line fires the heating elements of every dot it inks,
  *   which ticks; a dark line louder than a pale one, and a blank one not at all.
@@ -36,7 +36,7 @@
 #define GBP_TICKS_PER_SAMPLE 256
 
 /* The case's resonances a motor step rings (sound.c). */
-#define GBP_SOUND_MODES 7
+#define GBP_SOUND_MODES 8
 
 typedef struct gbp_sound
 {
@@ -44,14 +44,14 @@ typedef struct gbp_sound
    uint64_t motor_until;     /* tick the motor stops at, unless a line comes */
    uint64_t next_step;       /* tick of the next motor step */
    uint32_t rng;
-   uint32_t steps;           /* motor steps since load: where the gear is in its turn */
-   float mode[GBP_SOUND_MODES][2]; /* the case's resonances, two samples of history each */
-   float swell[2];           /* the band the mid-turn swell rings */
+   float turn;               /* where the gear is in its turn, 0 to 1 from the knock */
+   float turn_s;             /* how long this turn takes, seconds */
+   float mode[GBP_SOUND_MODES][2]; /* the motor's harmonics, two samples of history each */
+   float swell[2][2];        /* the two bands the mid-turn swell rings */
    float knock[2];           /* the once-a-turn knock */
    float knock_hiss;         /* its burst of noise, decaying */
-   float hiss_hp;            /* the hiss's band filter: high-pass state */
-   float hiss_lp;            /* and low-pass state */
-   float hiss_lp2;           /* and its second low-pass stage */
+   float hiss_hp;            /* the rattle's band filter: high-pass state */
+   float hiss_lp[4];         /* and its four low-pass stages */
    float click;              /* the head's tick, decaying */
    float click_gain;
 } gbp_sound;
