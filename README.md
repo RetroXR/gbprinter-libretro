@@ -13,7 +13,9 @@ another Game Boy.
   dot line, oldest at the top. No paper is a 1x1 frame. A frame is sent only when
   the strip changes.
 - **Audio:** 32768 Hz, the motor and the head while paper moves, silence
-  otherwise (`src/sound.h`). Synthesised from the mechanism, not recorded:
+  otherwise (`src/sound.h`). Synthesised, and fitted to a recording of a real
+  printer: the stepper's 127.7 Hz and the harmonics the case rings, the hiss,
+  and the gear's knock and swell once every 146 steps (1.14 s).
   `render_wav out.wav` renders a print to listen to.
 - **Input (port 0):** A = FEED (while held), B = TEAR on the press, tearing the
   oldest *LX* lines (left stick X as a plain count, or everything when 0).
