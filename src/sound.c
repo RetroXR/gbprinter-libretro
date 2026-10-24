@@ -46,28 +46,31 @@ static const float TURN_STEP_HZ[TURN_PARTS] = {
 static const float MODE_HARMONIC[GBP_SOUND_MODES] = { 9, 10, 18, 20, 24, 36, 40 };
 static const float MODE_GAIN[GBP_SOUND_MODES] = { 0.30f, 1.00f, 0.50f, 0.50f, 0.25f, 0.70f, 0.40f };
 #define MODE_DECAY_S 0.060f
-#define STEP_STRIKE 0.012f
+#define STEP_STRIKE 0.0075f
 
-/* The hiss under the tones, 1-7 kHz (MEASURED: most of the recording's energy
- * is broadband there), half steady and half a pulse with each step. */
+/* The rattle under the tones, 1-6 kHz (MEASURED: much of the recording's energy
+ * is broadband there, and it swells and falls with each step, about 1.8 times;
+ * its top falls away past 6 kHz). Two low-pass stages, and a smooth rise and
+ * fall over each step down to HISS_FLOOR of its peak: one gentle stage up to
+ * 12 kHz, steady, was a bright even wash that sounded like white noise, and a
+ * sharp hit each step that decayed was a spike the recording does not have. */
 #define HISS_HP_HZ 1000.0f
-#define HISS_LP_HZ 12000.0f
-#define HISS_FLOOR 0.85f
-#define HISS_DECAY_S 0.004f
-#define HISS_GAIN 0.20f
+#define HISS_LP_HZ 6000.0f
+#define HISS_FLOOR 0.72f
+#define HISS_GAIN 0.26f
 /* The step itself, a sharp tick through the hiss's band: MEASURED, the
  * recording carries a faint line at every harmonic of the step, not only the
  * ones the case rings. */
-#define TICK_GAIN 3.0f
+#define TICK_GAIN 0.4f
 
 /* The knock once a turn: MEASURED a 3 ms ring near 5 kHz, ten times the motor. */
 #define KNOCK_HZ 5000.0f
 #define KNOCK_DECAY_S 0.0012f
-#define KNOCK_STRIKE 2.5f
+#define KNOCK_STRIKE 1.8f
 /* MEASURED, too: the knock is heard right across the spectrum, so with the
  * ring comes a burst of noise as short. */
 #define KNOCK_HISS_DECAY_S 0.0015f
-#define KNOCK_HISS_GAIN 0.25f
+#define KNOCK_HISS_GAIN 0.18f
 
 /* The swell in the turn: MEASURED 3-4 kHz, from about 0.3 to 0.6 of
  * the turn, MEASURED where the motor's tones dip (TURN_LEVEL_DB). Noise rung
@@ -83,7 +86,7 @@ static const float MODE_GAIN[GBP_SOUND_MODES] = { 0.30f, 1.00f, 0.50f, 0.50f, 0.
 #define CLICK_DECAY_S 0.0018f
 #define CLICK_GAIN 0.35f
 
-#define OUTPUT_GAIN 8000.0f
+#define OUTPUT_GAIN 14000.0f
 
 #define TWO_PI 6.28318530718f
 
@@ -136,7 +139,6 @@ unsigned gbp_sound_frame(gbp_sound *s, gbp_printer *p, uint64_t end_tick, int16_
    unsigned n_ev = gbp_take_events(p, end_tick, ev, GBP_EVENTS_MAX);
    unsigned e = 0;
    unsigned frames = 0;
-   const float hiss_decay = expf(-1.0f / (HISS_DECAY_S * (float)GBP_SOUND_RATE));
    const float knock_hiss_decay = expf(-1.0f / (KNOCK_HISS_DECAY_S * (float)GBP_SOUND_RATE));
    const float hp_a = 1.0f - expf(-TWO_PI * HISS_HP_HZ / (float)GBP_SOUND_RATE);
    const float lp_a = 1.0f - expf(-TWO_PI * HISS_LP_HZ / (float)GBP_SOUND_RATE);
@@ -190,7 +192,6 @@ unsigned gbp_sound_frame(gbp_sound *s, gbp_printer *p, uint64_t end_tick, int16_
       {
          strike = STEP_STRIKE;
          s->steps++;
-         s->hiss = 1.0f;
          if (s->steps % STEPS_PER_TURN == 0)
          {
             knock = KNOCK_STRIKE;
@@ -237,8 +238,14 @@ unsigned gbp_sound_frame(gbp_sound *s, gbp_printer *p, uint64_t end_tick, int16_
          float in = n + strike * TICK_GAIN;
          s->hiss_hp += hp_a * (in - s->hiss_hp);
          s->hiss_lp += lp_a * ((in - s->hiss_hp) - s->hiss_lp);
-         v += s->hiss_lp * HISS_GAIN * (running ? HISS_FLOOR + (1.0f - HISS_FLOOR) * s->hiss : 0.0f);
-         s->hiss *= hiss_decay;
+         s->hiss_lp2 += lp_a * (s->hiss_lp - s->hiss_lp2);
+         if (running)
+         {
+            /* How far through this step, 0 to 1: loudest as it lands. */
+            float into = (float)(tick + STEP_TICKS - s->next_step) / (float)STEP_TICKS;
+            float pulse = 0.5f + 0.5f * cosf(TWO_PI * into);
+            v += s->hiss_lp2 * HISS_GAIN * (HISS_FLOOR + (1.0f - HISS_FLOOR) * pulse);
+         }
          v += resonate(s->swell, swell, SWELL_HZ, SWELL_DECAY_S);
       }
       if (s->click > 0.001f)

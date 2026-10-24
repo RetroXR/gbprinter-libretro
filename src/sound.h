@@ -51,7 +51,7 @@ typedef struct gbp_sound
    float knock_hiss;         /* its burst of noise, decaying */
    float hiss_hp;            /* the hiss's band filter: high-pass state */
    float hiss_lp;            /* and low-pass state */
-   float hiss;               /* the hiss's pulse with each step, decaying */
+   float hiss_lp2;           /* and its second low-pass stage */
    float click;              /* the head's tick, decaying */
    float click_gain;
 } gbp_sound;
