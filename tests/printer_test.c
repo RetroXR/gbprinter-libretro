@@ -686,6 +686,21 @@ static void test_core_on_the_wire(uint64_t spacing)
    CHECK(printer.strip_lines >= 30 && printer.strip_lines <= 40, "a second of FEED gave %u lines",
          printer.strip_lines);
 
+   /* Fed on and on, past the 14 cm the strip once stopped at (1024 lines, the
+    * end vanishing a line at a time): it keeps growing, and the frontend is
+    * shown all of it within a few frames. */
+   {
+      unsigned before = printer.strip_lines;
+      pad_a = 1;
+      run_frames(60 * 40);
+      pad_a = 0;
+      CHECK(printer.strip_lines > 1300 && printer.strip_lines > before,
+            "forty seconds of FEED left %u lines of paper", printer.strip_lines);
+      run_frames(8);
+      CHECK(frame_h == printer.strip_lines, "the frontend is shown %u lines of the %u out", frame_h,
+            printer.strip_lines);
+   }
+
    /* Savestate through the libretro entry points: two runs from one state
     * agree. */
    {

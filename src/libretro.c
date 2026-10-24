@@ -147,6 +147,13 @@ static retro_log_printf_t log_cb;
 static uint32_t framebuffer[GBP_STRIP_MAX * GBP_WIDTH];
 static uint32_t sent_serial;
 static int sent_any;
+/* The paper is sent at most every PRESENT_EVERY frames while it grows: a strip
+ * of thousands of lines is megabytes a frame to upload, and two or three lines
+ * at a time (a third of a millimeter) is not seen. A tear goes at once. Not
+ * in the savestate: what the frontend is shown is not the printer's state. */
+#define PRESENT_EVERY 4
+static unsigned sent_lines;
+static unsigned frames_since_sent;
 
 static void log_msg(enum retro_log_level level, const char *fmt, ...)
 {
@@ -416,13 +423,17 @@ static void present(void)
    unsigned lines = printer.strip_lines;
    unsigned y, x;
 
-   if (sent_any && sent_serial == printer.strip_serial)
+   frames_since_sent++;
+   if (sent_any && (sent_serial == printer.strip_serial
+         || (lines >= sent_lines && frames_since_sent < PRESENT_EVERY)))
    {
-      video_cb(NULL, GBP_WIDTH, lines ? lines : 1, GBP_WIDTH * sizeof(uint32_t));
+      video_cb(NULL, GBP_WIDTH, sent_lines ? sent_lines : 1, GBP_WIDTH * sizeof(uint32_t));
       return;
    }
    sent_any = 1;
    sent_serial = printer.strip_serial;
+   sent_lines = lines;
+   frames_since_sent = 0;
 
    if (lines == 0)
    {

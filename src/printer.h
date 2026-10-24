@@ -39,11 +39,12 @@
 #define GBP_TILE_ROW_BYTES (20 * 16)
 #define GBP_PACKET_BYTES   0x280
 
-/* Longest strip kept before the oldest lines are let go. A Game Boy Camera
- * photo is 144 lines plus its margins, so this is about six of them -- far
- * more paper than anyone leaves hanging out of a slot, and still a texture a
- * headset can take. */
-#define GBP_STRIP_MAX      1024
+/* Longest strip kept before the oldest lines are let go: 56 cm, some two dozen
+ * Game Boy Camera photos (144 lines and margins each). At 1024 (14 cm) a player
+ * printing on without tearing saw the paper stop growing and its end vanish a
+ * line at a time. Still a texture a headset takes, sent at most every few
+ * frames (libretro.c PRESENT_EVERY). */
+#define GBP_STRIP_MAX      4096
 
 /* How long one dot line takes to burn and feed, in link ticks.
  *
@@ -99,7 +100,7 @@ enum
 /* Everything here is plain data with no pointers, so a savestate is a copy of
  * the struct -- see gbp_serialize. Field order is the savestate layout: append
  * only, and bump GBP_STATE_VERSION when it changes. */
-#define GBP_STATE_VERSION 3
+#define GBP_STATE_VERSION 4
 
 /* A line of paper coming out, for the sound: when, and how many of its dots
  * were burned (none for paper only fed). Kept until the core's audio has
