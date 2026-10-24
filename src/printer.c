@@ -7,6 +7,7 @@ void gbp_init(gbp_printer *p)
    memset(p, 0, sizeof(*p));
    p->at = GBP_AT_MAGIC0;
    p->reply = 0x00;
+   p->strip_limit = GBP_STRIP_MAX;
 }
 
 size_t gbp_serialize_size(void)
@@ -57,16 +58,13 @@ unsigned gbp_take_events(gbp_printer *p, uint64_t tick, gbp_line_event *out, uns
 static void strip_push(gbp_printer *p, const uint8_t *line, uint64_t tick)
 {
    note_line(p, line, tick);
-   if (p->strip_lines >= GBP_STRIP_MAX)
-   {
-      /* The oldest paper falls off the end. Nobody tore it, and a strip this
-       * long is lying on the table anyway; what matters is that the newest line,
-       * the one at the print head, is never the one lost. */
-      memmove(p->strip[0], p->strip[1], (size_t)(GBP_STRIP_MAX - 1) * GBP_WIDTH);
-      p->strip_lines = GBP_STRIP_MAX - 1;
-   }
-   memcpy(p->strip[p->strip_lines], line, GBP_WIDTH);
-   p->strip_lines++;
+   /* The oldest paper falls off the end. Nobody tore it, and a strip this
+    * long is lying on the table anyway; what matters is that the newest line,
+    * the one at the print head, is never the one lost. */
+   if (p->strip_limit && gbp_strip_lines(p) >= p->strip_limit)
+      p->strip_first = p->strip_end - p->strip_limit + 1;
+   memcpy(p->strip[p->strip_end & (GBP_RING - 1)], line, GBP_WIDTH);
+   p->strip_end++;
    p->strip_serial++;
 }
 
@@ -79,19 +77,28 @@ static void strip_push_blank(gbp_printer *p, uint64_t tick)
 
 unsigned gbp_tear(gbp_printer *p, unsigned lines)
 {
-   if (lines > p->strip_lines)
-      lines = p->strip_lines;
+   if (lines > gbp_strip_lines(p))
+      lines = gbp_strip_lines(p);
    if (lines == 0)
       return 0;
 
    /* The OLDEST lines go: they are the ones furthest out of the slot, and the
     * room tears what it could see. Anything burned since it looked is still
     * nearer the head and stays on the roll. */
-   memmove(p->strip[0], p->strip[lines], (size_t)(p->strip_lines - lines) * GBP_WIDTH);
-   p->strip_lines = (uint16_t)(p->strip_lines - lines);
+   p->strip_first += lines;
    p->strip_serial++;
    p->tear_count++;
    return lines;
+}
+
+unsigned gbp_tear_to(gbp_printer *p, uint32_t rem, uint32_t mod)
+{
+   /* The latest line number at or before strip_end with that remainder. */
+   uint32_t back = (p->strip_end % mod + mod - rem % mod) % mod;
+   uint32_t end = p->strip_end - back;
+   if (back > p->strip_end || end <= p->strip_first)
+      return 0;
+   return gbp_tear(p, end - p->strip_first);
 }
 
 /* ------------------------------------------------------------------------ */

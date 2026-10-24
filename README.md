@@ -10,15 +10,23 @@ it would to the real printer; neither Game Boy core knows the far end is not
 another Game Boy.
 
 - **Video:** the paper strip hanging out of the slot, 160 dots wide, one row per
-  dot line, oldest at the top. No paper is a 1x1 frame. A frame is sent only when
-  the strip changes.
+  dot line, oldest at the top, up to 4096 lines (56 cm). No paper is a 1x1 frame.
+  A frame is sent only when the strip changes.
+  With the core option `gbprinter_paper_frames` = `window`, a frontend that
+  keeps the strip itself gets a frame that never changes size instead: a header
+  row (which lines are out, which are below it) and 128 lines, the newest
+  whenever the strip changes and then older ones back over the 4096 the core
+  keeps, so it can show a strip of up to 65280 lines (about 9 m) for a few
+  kilobytes a frame. The layout is in `src/libretro.c` (`OPT_FRAMES`).
 - **Audio:** 32768 Hz, the motor and the head while paper moves, silence
   otherwise (`src/sound.h`). Synthesised, and fitted to a recording of a real
   printer: the stepper's 127.7 Hz and the harmonics the case rings, the hiss,
   and the gear's knock and swell once every 146 steps (1.14 s).
   `render_wav out.wav` renders a print to listen to.
 - **Input (port 0):** A = FEED (while held), B = TEAR on the press, tearing the
-  oldest *LX* lines (left stick X as a plain count, or everything when 0).
+  oldest *LX* lines (left stick X as a plain count, or everything when 0), or,
+  with left stick Y above 0, everything before the line whose number modulo
+  32767 is *LY* - 1 (the end of the strip a `window` frontend captured).
 - **Timing:** exactly one Game Boy frame (140448 link ticks) per `retro_run`, at
   the Game Boy's 59.7275 fps, so a netplay session can step it alongside the
   Game Boy it is cabled to.

@@ -169,7 +169,7 @@ static int strip_matches(const gbp_printer *p, unsigned first, unsigned lines, u
    unsigned x, y;
    for (y = 0; y < lines; y++)
       for (x = 0; x < GBP_WIDTH; x++)
-         if (p->strip[first + y][x] != expect_grey(colour_at(x, y, seed), palette, exposure))
+         if (gbp_strip_row(p, first + y)[x] != expect_grey(colour_at(x, y, seed), palette, exposure))
          {
             *bad_x = x;
             *bad_y = y;
@@ -183,7 +183,7 @@ static int blank_lines(const gbp_printer *p, unsigned first, unsigned count)
    unsigned y, x;
    for (y = first; y < first + count; y++)
       for (x = 0; x < GBP_WIDTH; x++)
-         if (p->strip[y][x] != 0xFF)
+         if (gbp_strip_row(p, y)[x] != 0xFF)
             return 0;
    return 1;
 }
@@ -267,12 +267,12 @@ static void test_print_sequence(int compress)
    st = packet(&P, GBP_CMD_STATUS, 0, NULL, 0, 0, NULL);
    CHECK(st == GBP_STATUS_FULL, "after printing 0x%02X, want 0x04", st);
 
-   CHECK(P.strip_lines == 16 + lines + 48, "strip %u lines, want %u", P.strip_lines, 16 + lines + 48);
+   CHECK(gbp_strip_lines(&P) == 16 + lines + 48, "strip %u lines, want %u", gbp_strip_lines(&P), 16 + lines + 48);
    CHECK(blank_lines(&P, 0, 16), "upper margin not blank");
    CHECK(blank_lines(&P, 16 + lines, 48), "lower margin not blank");
    CHECK(strip_matches(&P, 16, lines, 7, 0xE4, 0x40, &bx, &by),
          "%s picture differs at (%u,%u): got %u want %u", compress ? "RLE" : "raw",
-         bx, by, P.strip[16 + by][bx], expect_grey(colour_at(bx, by, 7), 0xE4, 0x40));
+         bx, by, gbp_strip_row(&P, 16 + by)[bx], expect_grey(colour_at(bx, by, 7), 0xE4, 0x40));
 
    st = packet(&P, GBP_CMD_INIT, 0, NULL, 0, 0, NULL);
    st = packet(&P, GBP_CMD_STATUS, 0, NULL, 0, 0, NULL);
@@ -288,7 +288,7 @@ static void test_print_takes_time(void)
    send_print(&P, 1, 0x00, 0xE4, 0x40);
    start = clock_tick;
    CHECK(P.job_active, "print did not start");
-   CHECK(P.strip_lines <= 1, "print burned %u lines at once", P.strip_lines);
+   CHECK(gbp_strip_lines(&P) <= 1, "print burned %u lines at once", gbp_strip_lines(&P));
    wait_print(&P);
    CHECK(clock_tick - start >= (uint64_t)15 * GBP_LINE_TICKS,
          "16 lines took %llu ticks, want about %u", (unsigned long long)(clock_tick - start),
@@ -318,7 +318,7 @@ static void test_print_needs_closed_buffer(void)
    len = encode_tiles(tiles, 16, 3);
    packet(&P, GBP_CMD_DATA, 0, tiles, len, 0, NULL);
    send_print(&P, 1, 0, 0xE4, 0x40);
-   CHECK(!P.job_active && P.strip_lines == 0, "PRINT without the empty DATA packet printed");
+   CHECK(!P.job_active && gbp_strip_lines(&P) == 0, "PRINT without the empty DATA packet printed");
 }
 
 static void test_palette_and_sheets(void)
@@ -330,7 +330,7 @@ static void test_palette_and_sheets(void)
    /* Palette 0x1B is 0xE4 backwards: white prints black. Two sheets, no margins. */
    send_print(&P, 2, 0x00, 0x1B, 0x7F);
    wait_print(&P);
-   CHECK(P.strip_lines == 32, "two sheets gave %u lines", P.strip_lines);
+   CHECK(gbp_strip_lines(&P) == 32, "two sheets gave %u lines", gbp_strip_lines(&P));
    CHECK(strip_matches(&P, 0, 16, 2, 0x1B, 0x7F, &bx, &by), "sheet 1 palette wrong at (%u,%u)", bx, by);
    CHECK(strip_matches(&P, 16, 16, 2, 0x1B, 0x7F, &bx, &by), "sheet 2 differs at (%u,%u)", bx, by);
    CHECK(expect_grey(0, 0x1B, 0x7F) == 0, "palette 0x1B colour 0 should burn black");
@@ -345,21 +345,21 @@ static void test_tear_and_feed(void)
    load_picture(&P, 16, 4, 0);
    send_print(&P, 1, 0x00, 0xE4, 0x40);
    wait_print(&P);
-   CHECK(P.strip_lines == 16, "strip %u", P.strip_lines);
+   CHECK(gbp_strip_lines(&P) == 16, "strip %u", gbp_strip_lines(&P));
 
    /* The OLDEST lines go, so what stays is what was burned last. */
-   left = P.strip[15][0];
-   CHECK(gbp_tear(&P, 10) == 10 && P.strip_lines == 6, "tear 10 left %u", P.strip_lines);
-   CHECK(P.strip[5][0] == left, "tear took the wrong end");
-   CHECK(gbp_tear(&P, 100) == 6 && P.strip_lines == 0, "tear-all left %u", P.strip_lines);
+   left = gbp_strip_row(&P, 15)[0];
+   CHECK(gbp_tear(&P, 10) == 10 && gbp_strip_lines(&P) == 6, "tear 10 left %u", gbp_strip_lines(&P));
+   CHECK(gbp_strip_row(&P, 5)[0] == left, "tear took the wrong end");
+   CHECK(gbp_tear(&P, 100) == 6 && gbp_strip_lines(&P) == 0, "tear-all left %u", gbp_strip_lines(&P));
    CHECK(P.tear_count == 2, "tear count %u", P.tear_count);
 
    gbp_run(&P, clock_tick, 1);
    gbp_run(&P, clock_tick + 10 * GBP_LINE_TICKS, 1);
-   CHECK(P.strip_lines == 10, "feeding 10 line-times gave %u lines", P.strip_lines);
-   CHECK(blank_lines(&P, 0, P.strip_lines), "fed paper is not blank");
+   CHECK(gbp_strip_lines(&P) == 10, "feeding 10 line-times gave %u lines", gbp_strip_lines(&P));
+   CHECK(blank_lines(&P, 0, gbp_strip_lines(&P)), "fed paper is not blank");
    gbp_run(&P, clock_tick + 20 * GBP_LINE_TICKS, 0);
-   CHECK(P.strip_lines == 10, "feed kept running after release (%u)", P.strip_lines);
+   CHECK(gbp_strip_lines(&P) == 10, "feed kept running after release (%u)", gbp_strip_lines(&P));
 }
 
 static void test_state_round_trip(void)
@@ -371,15 +371,15 @@ static void test_state_round_trip(void)
    send_print(&P, 1, 0x13, 0xE4, 0x40);
    mid = clock_tick + 40 * GBP_LINE_TICKS;
    gbp_run(&P, mid, 0);
-   CHECK(P.job_active && P.strip_lines > 20, "not mid-print (%u lines)", P.strip_lines);
+   CHECK(P.job_active && gbp_strip_lines(&P) > 20, "not mid-print (%u lines)", gbp_strip_lines(&P));
 
    /* A copy is the savestate. Both go on from here and must agree to the dot. */
    memcpy(&Q, &P, sizeof(P));
    gbp_run(&P, mid + 400 * GBP_LINE_TICKS, 0);
    gbp_run(&Q, mid + 400 * GBP_LINE_TICKS, 0);
    CHECK(memcmp(&P, &Q, sizeof(P)) == 0, "a restored printer went a different way");
-   CHECK(!P.job_active && P.strip_lines == 16 + 144 + 48, "restored print ended with %u lines",
-         P.strip_lines);
+   CHECK(!P.job_active && gbp_strip_lines(&P) == 16 + 144 + 48, "restored print ended with %u lines",
+         gbp_strip_lines(&P));
 }
 
 /* ------------------------------------------------------------------------ */
@@ -456,6 +456,10 @@ static uint64_t RETRO_CALLCONV mock_advance(retro_link_port_t *h, uint64_t local
    return mock_now;
 }
 
+/* OPT_FRAMES as the frontend has it (NULL: never set), and whether it changed. */
+static const char *mock_frames;
+static bool mock_vars_changed;
+
 static bool RETRO_CALLCONV mock_environ(unsigned cmd, void *data)
 {
    switch (cmd)
@@ -474,6 +478,20 @@ static bool RETRO_CALLCONV mock_environ(unsigned cmd, void *data)
    case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT:
    case RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME:
    case RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS:
+   case RETRO_ENVIRONMENT_SET_VARIABLES:
+      return true;
+   case RETRO_ENVIRONMENT_GET_VARIABLE:
+   {
+      struct retro_variable *v = (struct retro_variable *)data;
+      v->value = NULL;
+      if (!mock_frames || strcmp(v->key, OPT_FRAMES) != 0)
+         return false;
+      v->value = mock_frames;
+      return true;
+   }
+   case RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE:
+      *(bool *)data = mock_vars_changed;
+      mock_vars_changed = false;
       return true;
    default:
       return false;
@@ -481,7 +499,7 @@ static bool RETRO_CALLCONV mock_environ(unsigned cmd, void *data)
 }
 
 static unsigned frame_w, frame_h, frames_sent, frames_duped;
-static uint32_t frame_px[GBP_STRIP_MAX * GBP_WIDTH];
+static uint32_t frame_px[(GBP_STRIP_MAX + 1) * GBP_WIDTH];
 static void RETRO_CALLCONV mock_video(const void *data, unsigned w, unsigned h, size_t pitch)
 {
    (void)pitch;
@@ -506,7 +524,7 @@ static size_t RETRO_CALLCONV mock_audio(const int16_t *data, size_t frames)
    return frames;
 }
 
-static int pad_a, pad_b, pad_lx;
+static int pad_a, pad_b, pad_lx, pad_ly;
 static void RETRO_CALLCONV mock_poll(void) {}
 static int16_t RETRO_CALLCONV mock_input(unsigned port, unsigned device, unsigned index, unsigned id)
 {
@@ -518,6 +536,8 @@ static int16_t RETRO_CALLCONV mock_input(unsigned port, unsigned device, unsigne
       return (int16_t)pad_b;
    if (device == RETRO_DEVICE_ANALOG && id == RETRO_DEVICE_ID_ANALOG_X)
       return (int16_t)pad_lx;
+   if (device == RETRO_DEVICE_ANALOG && id == RETRO_DEVICE_ID_ANALOG_Y)
+      return (int16_t)pad_ly;
    return 0;
 }
 
@@ -645,11 +665,11 @@ static void test_core_on_the_wire(uint64_t spacing)
    CHECK(wrong == 0, "Game Boy read %u bytes wrong", wrong);
 
    CHECK(frame_w == GBP_WIDTH && frame_h == 16, "paper frame %ux%u, want 160x16", frame_w, frame_h);
-   CHECK(printer.strip_lines == 16 && strip_matches(&printer, 0, 16, 5, 0xE4, 0x40, &bx, &by),
+   CHECK(gbp_strip_lines(&printer) == 16 && strip_matches(&printer, 0, 16, 5, 0xE4, 0x40, &bx, &by),
          "printed through the wire, differs at (%u,%u)", bx, by);
    for (i = 0; i < 16 * GBP_WIDTH; i++)
    {
-      uint32_t g = printer.strip[i / GBP_WIDTH][i % GBP_WIDTH];
+      uint32_t g = gbp_strip_row(&printer, i / GBP_WIDTH)[i % GBP_WIDTH];
       if (frame_px[i] != ((g << 16) | (g << 8) | g))
       {
          CHECK(0, "frame pixel %u is %08X, strip says %u", (unsigned)i, frame_px[i], g);
@@ -662,16 +682,16 @@ static void test_core_on_the_wire(uint64_t spacing)
    pad_b = 1;
    pad_lx = 10;
    run_frames(1);
-   CHECK(printer.strip_lines == 6, "tear through input left %u lines", printer.strip_lines);
+   CHECK(gbp_strip_lines(&printer) == 6, "tear through input left %u lines", gbp_strip_lines(&printer));
    run_frames(3);
-   CHECK(printer.strip_lines == 6, "a held B tore again (%u)", printer.strip_lines);
+   CHECK(gbp_strip_lines(&printer) == 6, "a held B tore again (%u)", gbp_strip_lines(&printer));
    pad_b = 0;
    pad_lx = 0;
    run_frames(1);
    pad_b = 1;
    run_frames(1);
    pad_b = 0;
-   CHECK(printer.strip_lines == 0, "B with LX 0 should tear everything, left %u", printer.strip_lines);
+   CHECK(gbp_strip_lines(&printer) == 0, "B with LX 0 should tear everything, left %u", gbp_strip_lines(&printer));
 
    /* FEED for a second puts out blank paper, and the motor is heard. */
    audio_energy = 0;
@@ -683,22 +703,22 @@ static void test_core_on_the_wire(uint64_t spacing)
    audio_energy = 0;
    run_frames(30);
    CHECK(audio_energy == 0, "the motor kept sounding after the paper stopped (%ld)", audio_energy);
-   CHECK(printer.strip_lines >= 30 && printer.strip_lines <= 40, "a second of FEED gave %u lines",
-         printer.strip_lines);
+   CHECK(gbp_strip_lines(&printer) >= 30 && gbp_strip_lines(&printer) <= 40, "a second of FEED gave %u lines",
+         gbp_strip_lines(&printer));
 
    /* Fed on and on, past the 14 cm the strip once stopped at (1024 lines, the
     * end vanishing a line at a time): it keeps growing, and the frontend is
     * shown all of it within a few frames. */
    {
-      unsigned before = printer.strip_lines;
+      unsigned before = gbp_strip_lines(&printer);
       pad_a = 1;
       run_frames(60 * 40);
       pad_a = 0;
-      CHECK(printer.strip_lines > 1300 && printer.strip_lines > before,
-            "forty seconds of FEED left %u lines of paper", printer.strip_lines);
+      CHECK(gbp_strip_lines(&printer) > 1300 && gbp_strip_lines(&printer) > before,
+            "forty seconds of FEED left %u lines of paper", gbp_strip_lines(&printer));
       run_frames(8);
-      CHECK(frame_h == printer.strip_lines, "the frontend is shown %u lines of the %u out", frame_h,
-            printer.strip_lines);
+      CHECK(frame_h == gbp_strip_lines(&printer), "the frontend is shown %u lines of the %u out", frame_h,
+            gbp_strip_lines(&printer));
    }
 
    /* Savestate through the libretro entry points: two runs from one state
@@ -729,6 +749,188 @@ static void test_core_on_the_wire(uint64_t spacing)
    retro_deinit();
 }
 
+/* ------------------------------------------------------------------------ */
+/* Window frames: a frontend that keeps the strip                            */
+/* ------------------------------------------------------------------------ */
+
+/* The strip as a frontend asking for windows keeps it, by line number. */
+#define ROOM_LINES (GBP_STRIP_LONG + 8192)
+static uint8_t room[ROOM_LINES][GBP_WIDTH];
+static uint8_t room_has[ROOM_LINES];
+static uint32_t room_first, room_end;
+
+/* Line n's dots, all different enough that a line in the wrong place shows. */
+static uint8_t line_dot(uint32_t n, unsigned x)
+{
+   return (uint8_t)((n * 7u + x * 13u + (n >> 8) * 3u) & 0xFF);
+}
+
+static void burn_numbered(unsigned count)
+{
+   uint8_t line[GBP_WIDTH];
+   unsigned i, x;
+   for (i = 0; i < count; i++)
+   {
+      uint32_t n = printer.strip_end;
+      for (x = 0; x < GBP_WIDTH; x++)
+         line[x] = line_dot(n, x);
+      strip_push(&printer, line, wire.now);
+   }
+}
+
+/* What the frontend does with the frame it has now: false if it is no window. */
+static int take_window(void)
+{
+   const uint32_t *h = frame_px;
+   uint32_t from, rows, k, x;
+   if (frame_w != GBP_WIDTH || frame_h != 1 + WINDOW_LINES || h[0] != WINDOW_MAGIC
+         || h[1] != WINDOW_FORMAT)
+      return 0;
+   room_first = h[2] | (h[3] << 24);
+   room_end = h[4] | (h[5] << 24);
+   from = h[6] | (h[7] << 24);
+   rows = h[8];
+   for (k = 0; k < rows; k++)
+   {
+      uint32_t n = from + k;
+      const uint32_t *row = frame_px + (size_t)(1 + k) * GBP_WIDTH;
+      if (n >= ROOM_LINES)
+         continue;
+      for (x = 0; x < GBP_WIDTH; x++)
+         room[n][x] = (uint8_t)(row[x] & 0xFF);
+      room_has[n] = 1;
+   }
+   return 1;
+}
+
+/* Run `n` frames, the frontend looking at only every `every`th. */
+static void run_seen(unsigned n, unsigned every)
+{
+   unsigned i;
+   for (i = 0; i < n; i++)
+   {
+      retro_run();
+      if ((i + 1) % every == 0)
+         take_window();
+   }
+}
+
+/* Every line the frontend's strip says is out, there and right. */
+static int room_whole(uint32_t *bad)
+{
+   uint32_t n;
+   unsigned x;
+   for (n = room_first; n < room_end; n++)
+   {
+      if (!room_has[n])
+      {
+         *bad = n;
+         return 0;
+      }
+      for (x = 0; x < GBP_WIDTH; x++)
+         if (room[n][x] != line_dot(n, x))
+         {
+            *bad = n;
+            return 0;
+         }
+   }
+   return 1;
+}
+
+static void test_core_window_frames(void)
+{
+   uint32_t bad = 0, seen_end;
+   size_t n;
+   void *state;
+
+   mock_out_n = mock_in_n = mock_in_next = 0;
+   mock_peers = 2;
+   pad_a = pad_b = pad_lx = pad_ly = 0;
+   memset(room_has, 0, sizeof(room_has));
+   mock_frames = "window";
+   mock_vars_changed = false;
+   retro_set_environment(mock_environ);
+   retro_set_video_refresh(mock_video);
+   retro_set_input_poll(mock_poll);
+   retro_set_input_state(mock_input);
+   retro_set_audio_sample_batch(mock_audio);
+   retro_init();
+   CHECK(retro_load_game(NULL), "load with no content failed");
+
+   frames_sent = frames_duped = 0;
+   run_frames(3);
+   CHECK(take_window(), "asked for windows, sent a %ux%u frame without the header", frame_w, frame_h);
+   CHECK(room_first == 0 && room_end == 0, "no paper out, the header says [%u, %u)", room_first, room_end);
+   CHECK(frames_sent == 1 && frames_duped == 2, "an unchanged empty strip was sent %u times", frames_sent);
+
+   /* Three thousand lines at once, far more than a window, and the frontend
+    * seeing one frame in three: the windows going back fill it all in. */
+   burn_numbered(3000);
+   run_seen(SWEEP_HOLD * (3000 / WINDOW_LINES + 4), 3);
+   CHECK(room_end == 3000 && room_first == 0, "header says [%u, %u), want [0, 3000)", room_first, room_end);
+   CHECK(room_whole(&bad), "line %u of the 3000 is missing or wrong", bad);
+   frames_sent = frames_duped = 0;
+   run_frames(10);
+   CHECK(frames_sent == 0, "a strip gone over once is sent again (%u frames)", frames_sent);
+   CHECK(frame_w == GBP_WIDTH && frame_h == 1 + WINDOW_LINES, "a window frame changed size");
+
+   /* Printing on far past what the core keeps (GBP_RING) and past what "whole"
+    * frames ever showed: the frontend that sees each frame has every line, and
+    * the strip stops at GBP_STRIP_LONG with its oldest let go. */
+   {
+      unsigned i;
+      for (i = 0; i < (GBP_STRIP_LONG + 4000) / 100; i++)
+      {
+         burn_numbered(100);
+         run_seen(1, 1);
+      }
+      run_seen(SWEEP_HOLD * (GBP_RING / WINDOW_LINES + 4), 1);
+      CHECK(gbp_strip_lines(&printer) == GBP_STRIP_LONG, "the long strip is %u lines, want %u",
+            gbp_strip_lines(&printer), GBP_STRIP_LONG);
+      CHECK(room_end == printer.strip_end && room_first == printer.strip_first,
+            "header [%u, %u), printer [%u, %u)", room_first, room_end, printer.strip_first, printer.strip_end);
+      CHECK(room_whole(&bad), "line %u of the long strip is missing or wrong", bad);
+   }
+
+   /* A tear says where the frontend's strip ended (LY); lines burned after it
+    * looked stay on the roll. */
+   seen_end = room_end;
+   burn_numbered(5);
+   pad_b = 1;
+   pad_ly = (int)(1 + seen_end % TEAR_MOD);
+   run_seen(1, 1);
+   pad_b = 0;
+   pad_ly = 0;
+   CHECK(printer.strip_first == seen_end && gbp_strip_lines(&printer) == 5,
+         "tear to %u left [%u, %u)", seen_end, printer.strip_first, printer.strip_end);
+   CHECK(room_first == seen_end && room_end == seen_end + 5, "the frontend is told [%u, %u) after the tear",
+         room_first, room_end);
+   run_seen(4, 1);
+   CHECK(room_whole(&bad), "after the tear line %u is missing or wrong", bad);
+
+   /* A savestate: the frontend is sent the strip again from the top. */
+   n = retro_serialize_size();
+   state = malloc(n);
+   CHECK(retro_serialize(state, n), "serialize failed");
+   CHECK(retro_unserialize(state, n), "unserialize failed");
+   frames_sent = 0;
+   run_frames(1);
+   CHECK(frames_sent == 1, "a loaded state was not sent");
+   free(state);
+
+   /* Back to whole frames: the strip itself, as an older frontend asks. */
+   mock_frames = "whole";
+   mock_vars_changed = true;
+   run_frames(1);
+   CHECK(frame_w == GBP_WIDTH && frame_h == 5, "whole frames again: %ux%u, want 160x5", frame_w, frame_h);
+   CHECK(frame_px[0] == (uint32_t)line_dot(seen_end, 0) * 0x010101u, "the whole frame is not the strip");
+   CHECK(printer.strip_limit == GBP_STRIP_MAX, "whole frames left the long limit (%u)", printer.strip_limit);
+
+   mock_frames = NULL;
+   retro_unload_game();
+   retro_deinit();
+}
+
 int main(void)
 {
    test_detection();
@@ -743,6 +945,7 @@ int main(void)
    test_core_on_the_wire(8192 + 512);
    /* Back to back in double speed, no gap at all. */
    test_core_on_the_wire(4096);
+   test_core_window_frames();
 
    printf("%d checks, %d failed\n", checks, failures);
    return failures;

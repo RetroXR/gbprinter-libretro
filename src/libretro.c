@@ -9,7 +9,8 @@
  *
  * What it shows is the paper: the video frame is the strip hanging out of the
  * slot, one row per dot line, oldest at the top. A frontend that wants the paper
- * draws the frame on it; one that does not can ignore it.
+ * draws the frame on it; one that does not can ignore it. One that keeps the
+ * strip itself can ask for a window of it instead (OPT_FRAMES).
  *
  * Its two buttons are input, so that a netplay session replays them like any
  * other press:
@@ -19,6 +20,7 @@
  *        stick X, as a plain count), or all of it when LX is 0. A frontend that
  *        captured the strip to keep what was torn says how much it captured, so
  *        a line burned between its look and the press is never thrown away.
+ *        Or, with LY above 0, where the strip it captured ended (OPT_FRAMES).
  */
 #include <stdarg.h>
 #include <stdio.h>
@@ -154,6 +156,40 @@ static int sent_any;
 #define PRESENT_EVERY 4
 static unsigned sent_lines;
 static unsigned frames_since_sent;
+
+/* How the paper is sent, the core option OPT_FRAMES. "whole": the strip, every
+ * line of it, one row a line (at most GBP_STRIP_MAX). What every frontend got
+ * before there was a choice, so one that never asks still does.
+ *
+ * "window": a frame that never changes size, WINDOW_LINES of the strip under
+ * a header row, for a frontend that keeps the strip itself and so can show
+ * one far longer (GBP_STRIP_LONG) for a few kilobytes a frame. The header's
+ * pixels, each 24 bits of RGB:
+ *
+ *   0 WINDOW_MAGIC   1 WINDOW_FORMAT
+ *   2 strip_first low 24 bits, 3 its high 8   (line numbers as printer.h's)
+ *   4 strip_end low 24 bits,   5 its high 8
+ *   6 the first line in the rows below, low 24, 7 its high 8
+ *   8 how many rows below are lines
+ *
+ * and row 1 + k is that first line + k, grey in R, G and B. The newest lines
+ * go whenever the strip changes; once it stops, older windows follow back to
+ * the oldest line still kept, each held SWEEP_HOLD frames, so a frontend that
+ * missed frames (one that only shows the latest, and looks at least every
+ * SWEEP_HOLD frames) has every line again a moment later. A frontend that
+ * keeps lines by number throws away nothing it has: the same number is the
+ * same line. TEAR then says where the frontend's strip ended (LY, see
+ * retro_run) rather than how long it was. */
+#define OPT_FRAMES "gbprinter_paper_frames"
+#define WINDOW_LINES 128
+#define SWEEP_HOLD 4
+#define WINDOW_MAGIC 0x475042u
+#define WINDOW_FORMAT 1u
+#define TEAR_MOD 32767u
+static int window_frames;
+static int win_any;
+static uint32_t win_first, win_end, win_sweep;
+static unsigned win_hold;
 
 static void log_msg(enum retro_log_level level, const char *fmt, ...)
 {
@@ -418,10 +454,83 @@ static void link_detach(void)
 /* Video                                                                     */
 /* ------------------------------------------------------------------------ */
 
+static void send_window(uint32_t from, uint32_t to)
+{
+   uint32_t *hdr = framebuffer;
+   unsigned rows = to - from, y, x;
+
+   memset(hdr, 0, GBP_WIDTH * sizeof(uint32_t));
+   hdr[0] = WINDOW_MAGIC;
+   hdr[1] = WINDOW_FORMAT;
+   hdr[2] = printer.strip_first & 0xFFFFFFu;
+   hdr[3] = printer.strip_first >> 24;
+   hdr[4] = printer.strip_end & 0xFFFFFFu;
+   hdr[5] = printer.strip_end >> 24;
+   hdr[6] = from & 0xFFFFFFu;
+   hdr[7] = from >> 24;
+   hdr[8] = rows;
+   for (y = 0; y < WINDOW_LINES; y++)
+   {
+      uint32_t *dst = framebuffer + (size_t)(1 + y) * GBP_WIDTH;
+      if (y >= rows)
+      {
+         for (x = 0; x < GBP_WIDTH; x++)
+            dst[x] = 0x00FFFFFFu;
+         continue;
+      }
+      {
+         const uint8_t *src = gbp_line(&printer, from + y);
+         for (x = 0; x < GBP_WIDTH; x++)
+         {
+            uint32_t g = src[x];
+            dst[x] = (g << 16) | (g << 8) | g;
+         }
+      }
+   }
+   video_cb(framebuffer, GBP_WIDTH, 1 + WINDOW_LINES, GBP_WIDTH * sizeof(uint32_t));
+}
+
+static void present_window(void)
+{
+   uint32_t first = printer.strip_first, end = printer.strip_end;
+   /* The oldest line still here to send. */
+   uint32_t floor = end - first > GBP_RING ? end - GBP_RING : first;
+
+   if (!win_any || first != win_first || end != win_end)
+   {
+      uint32_t from = end - floor > WINDOW_LINES ? end - WINDOW_LINES : floor;
+      win_any = 1;
+      win_first = first;
+      win_end = end;
+      win_sweep = from;
+      win_hold = SWEEP_HOLD - 1;
+      send_window(from, end);
+      return;
+   }
+   if (win_hold > 0)
+      win_hold--;
+   else if (win_sweep > floor)
+   {
+      uint32_t from = win_sweep - floor > WINDOW_LINES ? win_sweep - WINDOW_LINES : floor;
+      send_window(from, win_sweep);
+      win_sweep = from;
+      win_hold = SWEEP_HOLD - 1;
+      return;
+   }
+   video_cb(NULL, GBP_WIDTH, 1 + WINDOW_LINES, GBP_WIDTH * sizeof(uint32_t));
+}
+
 static void present(void)
 {
-   unsigned lines = printer.strip_lines;
+   uint32_t total = gbp_strip_lines(&printer);
+   unsigned lines = total > GBP_STRIP_MAX ? GBP_STRIP_MAX : total;
    unsigned y, x;
+
+   if (window_frames)
+   {
+      present_window();
+      return;
+   }
 
    frames_since_sent++;
    if (sent_any && (sent_serial == printer.strip_serial
@@ -446,7 +555,7 @@ static void present(void)
 
    for (y = 0; y < lines; y++)
    {
-      const uint8_t *src = printer.strip[y];
+      const uint8_t *src = gbp_strip_row(&printer, total - lines + y);
       uint32_t *dst = framebuffer + (size_t)y * GBP_WIDTH;
       for (x = 0; x < GBP_WIDTH; x++)
       {
@@ -468,10 +577,32 @@ RETRO_API void retro_set_environment(retro_environment_t cb)
    bool no_game = true;
    struct retro_log_callback logging;
 
+   static const struct retro_variable vars[] = {
+      { OPT_FRAMES, "Paper frames; whole|window" },
+      { NULL, NULL }
+   };
+
    environ_cb = cb;
    cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_game);
+   cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void *)vars);
    if (cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &logging))
       log_cb = logging.log;
+}
+
+/* OPT_FRAMES, and the strip it lets out of the slot. The same on every peer of
+ * a session, which all run the same frontend. */
+static void read_options(void)
+{
+   struct retro_variable var = { OPT_FRAMES, NULL };
+   int window = environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value
+      && strcmp(var.value, "window") == 0;
+   if (window != window_frames)
+   {
+      window_frames = window;
+      sent_any = 0;
+      win_any = 0;
+   }
+   printer.strip_limit = window_frames ? GBP_STRIP_LONG : GBP_STRIP_MAX;
 }
 
 RETRO_API void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb; }
@@ -528,32 +659,46 @@ RETRO_API void retro_reset(void)
 {
    /* Switching a printer off and on clears its RAM and its parser; the paper
     * already out of the slot stays where it is. */
-   uint16_t lines = printer.strip_lines;
+   uint32_t first = printer.strip_first, end = printer.strip_end;
    uint32_t serial = printer.strip_serial;
    uint32_t tears = printer.tear_count;
-   static uint8_t strip[GBP_STRIP_MAX][GBP_WIDTH];
+   uint32_t limit = printer.strip_limit;
+   static uint8_t strip[GBP_RING][GBP_WIDTH];
 
    memcpy(strip, printer.strip, sizeof(strip));
    gbp_init(&printer);
    memcpy(printer.strip, strip, sizeof(strip));
-   printer.strip_lines = lines;
+   printer.strip_first = first;
+   printer.strip_end = end;
    printer.strip_serial = serial + 1;
    printer.tear_count = tears;
+   printer.strip_limit = limit;
    wire.published = 0;
 }
 
 RETRO_API void retro_run(void)
 {
    int feed, tear;
-   int lx;
+   int lx, ly;
+   bool changed = false;
 
+   if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE, &changed) && changed)
+      read_options();
    input_poll_cb();
    feed = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A) != 0;
    tear = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B) != 0;
    lx = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X);
+   ly = input_state_cb(0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y);
 
+   /* LY, when given, is 1 + the strip's end as the room saw it, modulo
+    * TEAR_MOD; otherwise LX is how many lines it saw (0: all of them). */
    if (tear && !prev_tear)
-      gbp_tear(&printer, lx > 0 ? (unsigned)lx : GBP_STRIP_MAX);
+   {
+      if (ly > 0)
+         gbp_tear_to(&printer, (uint32_t)(ly - 1), TEAR_MOD);
+      else
+         gbp_tear(&printer, lx > 0 ? (unsigned)lx : gbp_strip_lines(&printer));
+   }
    prev_tear = (uint8_t)tear;
 
    link_frame(feed);
@@ -572,6 +717,7 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_A, "Feed" },
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B, "Tear" },
       { 0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_X, "Lines to tear" },
+      { 0, RETRO_DEVICE_ANALOG, RETRO_DEVICE_INDEX_ANALOG_LEFT, RETRO_DEVICE_ID_ANALOG_Y, "Line to tear to" },
       { 0, 0, 0, 0, NULL }
    };
    (void)game;
@@ -588,6 +734,8 @@ RETRO_API bool retro_load_game(const struct retro_game_info *game)
    memset(&wire, 0, sizeof(wire));
    prev_tear = 0;
    sent_any = 0;
+   win_any = 0;
+   read_options();
    link_attach();
    return true;
 }
@@ -641,6 +789,7 @@ RETRO_API bool retro_unserialize(const void *data, size_t size)
    /* The other end has been told nothing about this state yet. */
    wire.published = 0;
    sent_any = 0;
+   win_any = 0;
    return true;
 }
 

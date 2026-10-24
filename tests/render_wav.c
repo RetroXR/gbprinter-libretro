@@ -85,6 +85,6 @@ int main(int argc, char **argv)
    fwrite("data", 1, 4, f); put32(f, (uint32_t)(all_n * 2));
    fwrite(all, 2, all_n, f);
    fclose(f);
-   printf("%u lines printed, %.1f s of sound\n", P.strip_lines, all_n / 2.0 / GBP_SOUND_RATE);
+   printf("%u lines printed, %.1f s of sound\n", gbp_strip_lines(&P), all_n / 2.0 / GBP_SOUND_RATE);
    return 0;
 }

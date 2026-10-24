@@ -27,9 +27,12 @@
  * status to the second, and 0x00 to everything else. The checksum is the 16-bit
  * sum of everything from cmd to the last data byte.
  *
- * THE PAPER. What the printer burns is kept here as a strip of 160-dot lines,
- * oldest first: the length of paper hanging out of the slot that nobody has torn
- * off yet. Each dot is a grey level, 255 for bare paper. */
+ * THE PAPER. What the printer burns is a strip of 160-dot lines, the length of
+ * paper hanging out of the slot that nobody has torn off yet. Each dot is a
+ * grey level, 255 for bare paper. Lines are numbered from the first the
+ * printer ever burned: the strip is lines [strip_first, strip_end). Only the
+ * newest GBP_RING of them are kept here; a frontend that shows a longer strip
+ * keeps the older ones itself, from the frames it was sent (libretro.c). */
 
 #define GBP_WIDTH          160
 
@@ -39,12 +42,19 @@
 #define GBP_TILE_ROW_BYTES (20 * 16)
 #define GBP_PACKET_BYTES   0x280
 
-/* Longest strip kept before the oldest lines are let go: 56 cm, some two dozen
- * Game Boy Camera photos (144 lines and margins each). At 1024 (14 cm) a player
- * printing on without tearing saw the paper stop growing and its end vanish a
- * line at a time. Still a texture a headset takes, sent at most every few
- * frames (libretro.c PRESENT_EVERY). */
-#define GBP_STRIP_MAX      4096
+/* The newest lines kept, as a ring: 56 cm, some two dozen Game Boy Camera
+ * photos (144 lines and margins each). A power of two.
+ *
+ * Also the longest strip a frontend sent the whole of every frame is shown
+ * (GBP_STRIP_MAX): at 1024 (14 cm) a player printing on without tearing saw
+ * the paper stop growing and its end vanish a line at a time. A frontend
+ * keeping the strip itself (libretro.c, "window" frames) gets
+ * GBP_STRIP_LONG: about 9 m, 255 chunks of 256 lines, so that wherever it
+ * starts it spans no more than the 256 layers a GPU is sure to take in one
+ * texture array. */
+#define GBP_RING           4096
+#define GBP_STRIP_MAX      GBP_RING
+#define GBP_STRIP_LONG     (255u * 256u)
 
 /* How long one dot line takes to burn and feed, in link ticks.
  *
@@ -100,7 +110,7 @@ enum
 /* Everything here is plain data with no pointers, so a savestate is a copy of
  * the struct -- see gbp_serialize. Field order is the savestate layout: append
  * only, and bump GBP_STATE_VERSION when it changes. */
-#define GBP_STATE_VERSION 4
+#define GBP_STATE_VERSION 5
 
 /* A line of paper coming out, for the sound: when, and how many of its dots
  * were burned (none for paper only fed). Kept until the core's audio has
@@ -158,13 +168,16 @@ typedef struct gbp_printer
    uint8_t  pad[7];
    uint64_t feed_next_tick;
 
-   /* The strip of paper hanging out of the slot, oldest line first. */
-   uint16_t strip_lines;
-   uint16_t pad3;
+   /* The strip of paper hanging out of the slot: lines [strip_first,
+    * strip_end), line n at strip[n % GBP_RING] while it is among the newest
+    * GBP_RING. Past strip_limit lines the oldest are let go. */
+   uint32_t strip_first;
+   uint32_t strip_end;
    uint32_t strip_serial;    /* changes whenever the strip does */
    uint32_t tear_count;
+   uint32_t strip_limit;
    uint32_t pad4;
-   uint8_t  strip[GBP_STRIP_MAX][GBP_WIDTH];
+   uint8_t  strip[GBP_RING][GBP_WIDTH];
 
    /* Lines out since the sound last took them, oldest first. */
    uint32_t event_count;
@@ -192,6 +205,31 @@ void gbp_run(gbp_printer *p, uint64_t tick, int feed);
 /* Tear off the oldest `lines` lines of the strip (all of it if more). Returns
  * how many went. */
 unsigned gbp_tear(gbp_printer *p, unsigned lines);
+
+/* Tear off everything before line `end`, where all that is known of `end` is
+ * its remainder `rem` modulo `mod` and that it is no later than strip_end: what
+ * a frontend that numbered its lines as the printer does can say in one
+ * analog axis. Returns how many went. */
+unsigned gbp_tear_to(gbp_printer *p, uint32_t rem, uint32_t mod);
+
+/* Lines out of the slot. */
+static inline uint32_t gbp_strip_lines(const gbp_printer *p)
+{
+   return p->strip_end - p->strip_first;
+}
+
+/* Line `n`, numbered from the first ever burned. Only the newest GBP_RING are
+ * still here. */
+static inline const uint8_t *gbp_line(const gbp_printer *p, uint32_t n)
+{
+   return p->strip[n & (GBP_RING - 1)];
+}
+
+/* The `y`th line of the strip, oldest first. */
+static inline const uint8_t *gbp_strip_row(const gbp_printer *p, uint32_t y)
+{
+   return gbp_line(p, p->strip_first + y);
+}
 
 /* Savestate. The struct is the state; this is here so a caller never has to
  * know that. */
