@@ -46,6 +46,7 @@ typedef struct gbp_sound
    uint32_t rng;
    float turn;               /* where the gear is in its turn, 0 to 1 from the knock */
    float turn_s;             /* how long this turn takes, seconds */
+   uint32_t turns;           /* turns since the motor started */
    float mode[GBP_SOUND_MODES][2]; /* the motor's harmonics, two samples of history each */
    float swell[2][2];        /* the two bands the mid-turn swell rings */
    float knock[2];           /* the once-a-turn knock */

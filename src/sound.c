@@ -15,10 +15,18 @@
 
 /* MEASURED: one turn of the gear takes 1.1407 s, knock to knock, give or take
  * 7 ms from one turn to the next. Its own clock, not a count of steps: the step
- * rate changes through the turn. TURN_JITTER is the spread, as a uniform one
- * with that standard deviation. */
+ * rate changes through the turn.
+ *
+ * The give or take is a fixed pattern (TURN_OFFSET_S, standard deviation 7 ms)
+ * rather than noise, and the gear comes round to the knock whenever the motor
+ * starts: so the room, which cannot hear the core, can count the turns as they
+ * go and jolt the paper as each knocks (GbPrinter, which keeps these numbers
+ * too). Change one and change the other. */
 #define TURN_S 1.1407f
-#define TURN_JITTER 0.0126f
+#define TURN_OFFSETS 8
+static const float TURN_OFFSET_S[TURN_OFFSETS] = {
+   0.004f, -0.009f, 0.002f, 0.011f, -0.005f, -0.001f, 0.008f, -0.010f
+};
 
 /* MEASURED, in TURN_PARTS parts of the turn from the knock (median turns of the
  * recording, in time):
@@ -65,6 +73,8 @@ static const float TURN_RATTLE_DB[TURN_PARTS] = {
 static const float MODE_HARMONIC[GBP_SOUND_MODES] = { 9, 10, 18, 20, 24, 36, 39, 40 };
 static const float MODE_GAIN[GBP_SOUND_MODES] = { 0.30f, 1.00f, 0.57f, 0.64f, 0.36f, 0.97f, 0.65f, 0.56f };
 #define MODE_DECAY_S 0.060f
+/* How fast the rings die once the motor stops, seconds. */
+#define STOP_DECAY_S 0.015f
 #define STEP_STRIKE 0.0075f
 
 /* The rattle under the tones, 1-7 kHz: MEASURED much of the recording's energy
@@ -112,7 +122,7 @@ void gbp_sound_init(gbp_sound *s)
 {
    memset(s, 0, sizeof(*s));
    s->rng = 0x6B5A1C3Du;
-   s->turn_s = TURN_S;
+   s->turn_s = TURN_S + TURN_OFFSET_S[0];
 }
 
 static float noise(gbp_sound *s)
@@ -162,6 +172,7 @@ unsigned gbp_sound_frame(gbp_sound *s, gbp_printer *p, uint64_t end_tick, int16_
    const float hp_a = 1.0f - expf(-TWO_PI * HISS_HP_HZ / (float)GBP_SOUND_RATE);
    const float lp_a = 1.0f - expf(-TWO_PI * HISS_LP_HZ / (float)GBP_SOUND_RATE);
    const float click_decay = expf(-1.0f / (CLICK_DECAY_S * (float)GBP_SOUND_RATE));
+   const float stop_damp = expf(-1.0f / (STOP_DECAY_S * (float)GBP_SOUND_RATE));
    const uint64_t behind = (uint64_t)1100 * GBP_TICKS_PER_SAMPLE;
 
    /* Never more than two frames behind the clock. The core moves both a frame
@@ -187,7 +198,13 @@ unsigned gbp_sound_frame(gbp_sound *s, gbp_printer *p, uint64_t end_tick, int16_
       while (e < n_ev && ev[e].tick <= tick)
       {
          if (s->motor_until <= tick)
-            s->next_step = tick;   /* the motor starts on this line */
+         {
+            /* The motor starts on this line, the gear at its knock. */
+            s->next_step = tick;
+            s->turn = 0.0f;
+            s->turns = 0;
+            s->turn_s = TURN_S + TURN_OFFSET_S[0];
+         }
          s->motor_until = ev[e].tick + MOTOR_TAIL;
          if (ev[e].ink)
          {
@@ -200,7 +217,7 @@ unsigned gbp_sound_frame(gbp_sound *s, gbp_printer *p, uint64_t end_tick, int16_
       running = tick < s->motor_until;
       /* The gear turns while the motor runs, and knocks as it comes round; each
        * turn a little longer or shorter than the last. Stopped, it stays where it
-       * stopped. */
+       * stopped, until the motor starts again at the knock. */
       if (running)
       {
          if (s->turn_s <= 0.0f)
@@ -209,13 +226,25 @@ unsigned gbp_sound_frame(gbp_sound *s, gbp_printer *p, uint64_t end_tick, int16_
          if (s->turn >= 1.0f)
          {
             s->turn -= 1.0f;
-            s->turn_s = TURN_S + noise(s) * TURN_JITTER;
+            s->turns++;
+            s->turn_s = TURN_S + TURN_OFFSET_S[s->turns % TURN_OFFSETS];
             knock = KNOCK_STRIKE;
             s->knock_hiss = 1.0f;
          }
       }
       rate_now = turn_at(TURN_STEP_HZ, s->turn);
       step_ticks = (float)GBP_SOUND_RATE * GBP_TICKS_PER_SAMPLE / rate_now;
+      if (!running)
+      {
+         /* Stopped, the motor's rings die out quickly: left to their own 60 ms
+          * the louder harmonics were still faintly sounding half a second after
+          * the paper stopped. */
+         for (m = 0; m < GBP_SOUND_MODES; m++)
+         {
+            s->mode[m][0] *= stop_damp;
+            s->mode[m][1] *= stop_damp;
+         }
+      }
       if (running && tick >= s->next_step)
       {
          strike = STEP_STRIKE;
