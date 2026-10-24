@@ -74,12 +74,12 @@ static const float TURN_RATTLE_DB[TURN_PARTS] = {
  * the rate now, so the lines follow the pitch as it winds down and back. */
 static const float MODE_HARMONIC[GBP_SOUND_MODES] = { 9, 10, 18, 20, 24, 36, 39, 40, 21, 29, 41 };
 static const float MODE_GAIN[GBP_SOUND_MODES] = {
-   0.30f, 1.00f, 0.57f, 0.64f, 0.36f, 0.97f, 0.65f, 0.56f, 0.22f, 0.20f, 0.22f
+   0.30f, 1.00f, 0.57f, 0.64f, 0.36f, 0.97f, 0.65f, 0.56f, 0.37f, 0.34f, 0.41f
 };
-#define MODE_DECAY_S 0.060f
+#define MODE_DECAY_S 0.030f
 /* How fast the rings die once the motor stops, seconds. */
 #define STOP_DECAY_S 0.015f
-#define STEP_STRIKE 0.0075f
+#define STEP_STRIKE 0.015f
 
 /* The rattle under the tones, 1-7 kHz: MEASURED much of the recording's energy
  * is broadband there, uneven, and falling away above 7 kHz. Four low-pass stages,
@@ -87,7 +87,7 @@ static const float MODE_GAIN[GBP_SOUND_MODES] = {
  * step, down to HISS_FLOOR (MEASURED weak, and not locked from one turn to the
  * next); louder as the tones give way (TURN_RATTLE_DB). */
 #define HISS_HP_HZ 1000.0f
-#define HISS_LP_HZ 7000.0f
+#define HISS_LP_HZ 6500.0f
 #define HISS_FLOOR 0.8f
 #define HISS_GAIN 0.26f
 /* The step itself, a sharp tick through the rattle's band: the recording carries
@@ -100,7 +100,7 @@ static const float MODE_GAIN[GBP_SOUND_MODES] = {
 static const float KNOCK_HZ[3] = { 5000.0f, 3300.0f, 7200.0f };
 static const float KNOCK_MIX[3] = { 1.0f, 0.42f, 0.34f };
 #define KNOCK_DECAY_S 0.0022f
-#define KNOCK_STRIKE 1.05f
+#define KNOCK_STRIKE 0.9f
 #define KNOCK_HISS_DECAY_S 0.0025f
 #define KNOCK_HISS_GAIN 0.22f
 
