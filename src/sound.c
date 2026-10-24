@@ -17,6 +17,29 @@
 #define STEP_TICKS ((uint64_t)((float)GBP_SOUND_RATE * GBP_TICKS_PER_SAMPLE / STEP_HZ + 0.5f))
 #define STEPS_PER_TURN 146
 
+/* MEASURED: the motor through one turn of the gear, in TURN_PARTS parts from
+ * the knock, averaged over twelve turns of the recording: how loud its tones
+ * are (dB) and how fast it steps (Hz). A little after a third of the way round
+ * its tones fall away by 8 dB for a quarter of a second and come back: the
+ * winding heard turn after turn, and why a motor held at one level sounded
+ * flat. The dip is deepened by TURN_DEPTH, the averaging having blurred one
+ * that runs 10-15 dB in any single turn. */
+#define TURN_PARTS 40
+static const float TURN_LEVEL_DB[TURN_PARTS] = {
+   0.2f, 0.6f, 0.8f, 0.1f, 0.1f, -0.8f, -2.6f, -2.2f, -0.6f, -0.2f,
+   -1.4f, -4.2f, -8.3f, -9.3f, -8.2f, -7.1f, -7.1f, -7.9f, -7.9f, -8.2f,
+   -8.0f, -7.0f, -4.2f, -1.8f, -0.1f, 0.9f, 1.2f, 1.0f, 0.8f, 0.8f,
+   1.1f, 1.5f, 1.4f, 1.3f, 1.4f, 1.5f, 1.5f, 1.3f, 1.7f, 0.5f
+};
+static const float TURN_STEP_HZ[TURN_PARTS] = {
+   127.99f, 127.79f, 127.68f, 127.30f, 127.16f, 127.56f, 128.01f, 127.95f,
+   127.41f, 127.29f, 127.31f, 126.96f, 127.12f, 127.63f, 127.82f, 127.71f,
+   127.31f, 127.24f, 127.64f, 127.69f, 127.63f, 127.97f, 128.38f, 128.20f,
+   127.75f, 127.66f, 127.77f, 127.89f, 128.09f, 128.14f, 128.07f, 127.95f,
+   127.90f, 127.77f, 127.65f, 127.70f, 127.68f, 127.63f, 127.72f, 127.88f
+};
+#define TURN_DEPTH 1.25f
+
 /* MEASURED: which harmonics of the step ring loudest (9, 10, 18, 20, 24, 36,
  * 40), and roughly how loud against each other. Each rings longer than a step,
  * so the steps add up into those harmonics' lines rather than a rattle. */
@@ -46,12 +69,13 @@ static const float MODE_GAIN[GBP_SOUND_MODES] = { 0.30f, 1.00f, 0.50f, 0.50f, 0.
 #define KNOCK_HISS_DECAY_S 0.0015f
 #define KNOCK_HISS_GAIN 0.25f
 
-/* The swell half way round a turn: MEASURED 3-4 kHz, from about 0.4 to 0.75 of
- * the turn. Noise rung through a broad band there, faded in and out. */
+/* The swell in the turn: MEASURED 3-4 kHz, from about 0.3 to 0.6 of
+ * the turn, MEASURED where the motor's tones dip (TURN_LEVEL_DB). Noise rung
+ * through a broad band there, faded in and out. */
 #define SWELL_HZ 3300.0f
 #define SWELL_DECAY_S 0.004f
-#define SWELL_FROM 0.40f
-#define SWELL_TO 0.75f
+#define SWELL_FROM 0.30f
+#define SWELL_TO 0.60f
 #define SWELL_GAIN 0.03f
 
 /* The head's tick: noise, a couple of milliseconds long, as loud as the line is
@@ -59,7 +83,7 @@ static const float MODE_GAIN[GBP_SOUND_MODES] = { 0.30f, 1.00f, 0.50f, 0.50f, 0.
 #define CLICK_DECAY_S 0.0018f
 #define CLICK_GAIN 0.35f
 
-#define OUTPUT_GAIN 9000.0f
+#define OUTPUT_GAIN 8000.0f
 
 #define TWO_PI 6.28318530718f
 
@@ -96,6 +120,16 @@ static float resonate(float *y, float x, float hz, float decay_s)
    return out;
 }
 
+/* `table` (TURN_PARTS values round a turn) at `turn`, 0 to 1 from the knock. */
+static float turn_at(const float *table, float turn)
+{
+   float at = turn * (float)TURN_PARTS;
+   int i = (int)at;
+   float f = at - (float)i;
+   i %= TURN_PARTS;
+   return table[i] + (table[(i + 1) % TURN_PARTS] - table[i]) * f;
+}
+
 unsigned gbp_sound_frame(gbp_sound *s, gbp_printer *p, uint64_t end_tick, int16_t *out)
 {
    gbp_line_event ev[GBP_EVENTS_MAX];
@@ -124,6 +158,8 @@ unsigned gbp_sound_frame(gbp_sound *s, gbp_printer *p, uint64_t end_tick, int16_
       float v;
       int running;
       unsigned m;
+      float turn;
+      uint64_t step_ticks;
 
       /* Lines that came out by now: each keeps the motor going and, if it
        * burned anything, ticks the head. */
@@ -141,6 +177,15 @@ unsigned gbp_sound_frame(gbp_sound *s, gbp_printer *p, uint64_t end_tick, int16_
       }
 
       running = tick < s->motor_until;
+      /* Where the gear is in its turn: the steps it has made, and how far into
+       * the next. Stopped, it stays where it stopped -- worked out from a step
+       * long past it ran on, and the rings, retuned every sample, never died
+       * away to silence. */
+      turn = (float)(s->steps % STEPS_PER_TURN) / (float)STEPS_PER_TURN;
+      if (running && tick + STEP_TICKS >= s->next_step)
+         turn += (float)(tick + STEP_TICKS - s->next_step) / (float)STEP_TICKS / (float)STEPS_PER_TURN;
+      if (turn >= 1.0f)
+         turn -= 1.0f;
       if (running && tick >= s->next_step)
       {
          strike = STEP_STRIKE;
@@ -151,14 +196,26 @@ unsigned gbp_sound_frame(gbp_sound *s, gbp_printer *p, uint64_t end_tick, int16_
             knock = KNOCK_STRIKE;
             s->knock_hiss = 1.0f;
          }
-         s->next_step += STEP_TICKS;
+         /* Each step as long as the motor steps at this point of the turn. */
+         step_ticks = (uint64_t)((float)GBP_SOUND_RATE * GBP_TICKS_PER_SAMPLE
+            / turn_at(TURN_STEP_HZ, turn) + 0.5f);
+         s->next_step += step_ticks;
          if (s->next_step <= tick)
-            s->next_step = tick + STEP_TICKS;
+            s->next_step = tick + step_ticks;
       }
 
       v = 0.0f;
-      for (m = 0; m < GBP_SOUND_MODES; m++)
-         v += resonate(s->mode[m], strike, STEP_HZ * MODE_HARMONIC[m], MODE_DECAY_S) * MODE_GAIN[m];
+      {
+         /* The tones, as loud as the motor is at this point of its turn, each
+          * tuned to its harmonic of the rate the motor steps at now: tuned to the
+          * mean rate, a harmonic slid off its ring and back as the rate wandered,
+          * and swung 15 dB the recording never does. */
+         float tones = 0.0f;
+         const float rate_now = turn_at(TURN_STEP_HZ, turn);
+         for (m = 0; m < GBP_SOUND_MODES; m++)
+            tones += resonate(s->mode[m], strike, rate_now * MODE_HARMONIC[m], MODE_DECAY_S) * MODE_GAIN[m];
+         v += tones * powf(10.0f, TURN_DEPTH * turn_at(TURN_LEVEL_DB, turn) / 20.0f);
+      }
       v += resonate(s->knock, knock, KNOCK_HZ, KNOCK_DECAY_S);
       if (s->knock_hiss > 0.001f)
       {
@@ -171,8 +228,6 @@ unsigned gbp_sound_frame(gbp_sound *s, gbp_printer *p, uint64_t end_tick, int16_
          /* Noise only while the motor turns: the hiss through its band, and the
           * swell's through its own, faded by where the gear is in its turn. */
          float n = running ? noise(s) : 0.0f;
-         float turn = ((float)(s->steps % STEPS_PER_TURN)
-            + (float)(tick + STEP_TICKS - s->next_step) / (float)STEP_TICKS) / (float)STEPS_PER_TURN;
          float swell = 0.0f;
          if (running && turn > SWELL_FROM && turn < SWELL_TO)
          {
