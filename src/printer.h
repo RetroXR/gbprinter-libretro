@@ -99,7 +99,7 @@ enum
 /* Everything here is plain data with no pointers, so a savestate is a copy of
  * the struct -- see gbp_serialize. Field order is the savestate layout: append
  * only, and bump GBP_STATE_VERSION when it changes. */
-#define GBP_STATE_VERSION 2
+#define GBP_STATE_VERSION 3
 
 /* A line of paper coming out, for the sound: when, and how many of its dots
  * were burned (none for paper only fed). Kept until the core's audio has
