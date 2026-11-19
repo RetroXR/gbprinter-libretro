@@ -614,8 +614,7 @@ RETRO_API void retro_set_input_state(retro_input_state_t cb) { input_state_cb = 
 RETRO_API void retro_init(void)
 {
    memset(&link_iface, 0, sizeof(link_iface));
-   link_have_iface = environ_cb(RETRO_ENVIRONMENT_GET_LINK_INTERFACE, &link_iface)
-      || environ_cb(RETRO_ENVIRONMENT_GET_LINK_INTERFACE_FINAL, &link_iface);
+   link_have_iface = environ_cb(RETRO_ENVIRONMENT_GET_LINK_INTERFACE, &link_iface);
    if (!link_have_iface)
       log_msg(RETRO_LOG_WARN, "the frontend has no link bus; nothing can print\n");
    gbp_init(&printer);
